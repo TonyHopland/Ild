@@ -856,6 +856,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
 
         var noProxy = Assert.Single(Env(_api.Execs.Last()), c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
+        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
         var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host, RunPaths.WorkingDirectory(_run)));
         Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
@@ -897,8 +898,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
             Assert.DoesNotContain("HTTPS_PROXY=", exec.Joined, StringComparison.Ordinal);
         }
     }
-
-    // -- Kill leftovers ----------------------------------------------------------
 
     // -- Delete and sweep --------------------------------------------------------
 

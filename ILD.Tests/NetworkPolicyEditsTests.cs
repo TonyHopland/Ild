@@ -4,6 +4,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -217,6 +218,24 @@ public sealed class NetworkPolicyEditsTests : IDisposable
         var result = await Edits(_db.Network, racing).UpdateForwardAsync(mine.Id, "db", "db.internal", 5432, 15440, Ct);
 
         Assert.Equal(("Local port 15440 is already forwarded", NetworkEditOutcome.Refused), (result.Error, result.Outcome));
+        AssertNothingChanged();
+    }
+
+    [Fact]
+    public async Task An_update_of_an_entry_or_a_forward_deleted_between_its_load_and_its_save_is_answered_as_missing()
+    {
+        // The window is inside the store's update, so the store's save is made to fail as EF does when the row is gone.
+        static Task Gone() => throw new DbUpdateConcurrencyException("The row is gone.");
+        var entry = await SeedEntryAsync("mine.example.com");
+        var forward = await SeedForwardAsync(15432);
+
+        var entryResult = await Edits(new RacingEntries(_db.Network) { BeforeUpdate = Gone })
+            .UpdateEntryAsync(entry.Id, "api.example.com", NetworkListKind.Whitelist, null, false, Ct);
+        var forwardResult = await Edits(_db.Network, new RacingForwards(_db.NetworkForwards) { BeforeUpdate = Gone })
+            .UpdateForwardAsync(forward.Id, "db", "db.internal", 5432, 15440, Ct);
+
+        Assert.Equal(NetworkEditOutcome.NotFound, entryResult.Outcome);
+        Assert.Equal(NetworkEditOutcome.NotFound, forwardResult.Outcome);
         AssertNothingChanged();
     }
 

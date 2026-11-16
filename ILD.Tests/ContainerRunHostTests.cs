@@ -447,6 +447,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         var noProxy = Assert.Single(_api.Execs.Last().Env, c => c.StartsWith("NO_PROXY=", StringComparison.Ordinal))[9..].Split(',');
         Assert.Contains("ild-api", noProxy);
+        Assert.DoesNotContain(noProxy, e => "x.preview.ild".EndsWith(e.TrimStart('.'), StringComparison.Ordinal) && e is not ("localhost" or "127.0.0.1" or "::1" or "[::1]"));
         Assert.Equal("http://ild-api:8080", _host.GatewayApiUrl(null, RunPaths.WorkingDirectory(_run)));
         var mcp = IldMcpServer.BuildEnvironment(null, environment: new RunFacingEnvironment(new TestProcessEnvironment { { "ILD_API_URL", "http://ild:8080" } }, _host, RunPaths.WorkingDirectory(_run)));
         Assert.Contains(new Uri((string)mcp["ILD_API_URL"]!).Host, noProxy);
@@ -835,8 +836,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(OpenNetwork(_run), _api.Networks());
         Assert.DoesNotContain(_host.SharedOpenNetworkName, _api.Networks());
     }
-
-    // -- Kill leftovers ----------------------------------------------------------
 
     // -- Terminal, files, preview ------------------------------------------------
 

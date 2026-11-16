@@ -40,6 +40,8 @@ public sealed class RunHolderRoutingTests : IDisposable
         { Run, Run, "{run}", false, true, Run, 1 },
         { Run, null, "{other}", false, true, "refusing to run sh in /data/worktrees/x, which is outside run", 1 },
         { Run, null, "{unknown}", false, true, "refusing to run sh in {unknown}, which is outside run", 1 },
+        // A path that starts in the run and climbs out of it is read as where it ends.
+        { Run, null, "{run}/../../{unknown-id}/repo", false, true, "which is outside run", 1 },
         { Run, null, "{other}", true, true, Predates, 0 },
         { "unknown", null, "{unknown}", false, true, "never runs on ILD's own machine", 1 },
         { "unknown", Run, "{run}", false, true, "never runs on ILD's own machine", 1 },
@@ -68,6 +70,7 @@ public sealed class RunHolderRoutingTests : IDisposable
         .Replace("{run}", RunPaths.WorkingDirectory(_run))
         .Replace("{chat}", RunPaths.ChatRoot(_chat))
         .Replace("{unknown}", RunPaths.WorkingDirectory(_unknown))
+        .Replace("{unknown-id}", _unknown.ToString("N"))
         .Replace("{other}", "/data/worktrees/x");
 
     private static ProcessStartInfo Start(string directory) => new("sh") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
