@@ -288,13 +288,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     private static readonly Regex ForwardHost = new(@"^[A-Za-z0-9]([A-Za-z0-9.\-]*[A-Za-z0-9])?$", RegexOptions.Compiled);
 
     /// <summary>The declared forwards, read when a command or terminal starts in a run or chat; null runs with none.</summary>
-    public Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? Forwards { get; set; }
+    public Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? Forwards { get; init; }
 
     /// <summary>Checks, from the first environment made, that the network leaves no way out but the proxy; null runs no probe.</summary>
-    public ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe? Probe { get; set; }
+    public ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe? Probe { get; init; }
 
     /// <summary>What the egress proxy refused each toolchain installer, to name in a failed install; null where the host has none.</summary>
-    public ILD.Core.Services.Implementations.Network.InstallerRefusals? Refusals { get; set; }
+    public ILD.Core.Services.Implementations.Network.InstallerRefusals? Refusals { get; init; }
 
     // The environments that were given relays, so one whose forwards all went is cleaned up, and one that never had
     // any costs no extra exec per command.
@@ -426,14 +426,27 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private static readonly TimeSpan TerminationKept = TimeSpan.FromHours(1);
 
-    /// <summary>Keeps <paramref name="termination"/> as what ended the run's pod or container, for a command that ends after it is replaced.</summary>
-    protected void Remember(Guid run, RunTermination? termination)
+    // Keeps what ended the run's pod or container, for a command that ends after it is replaced.
+    private void Remember(Guid run, RunTermination? termination)
     {
         if (termination is null) return;
         var now = DateTimeOffset.UtcNow;
         foreach (var (id, kept) in _terminations)
             if (now - kept.RecordedAt > TerminationKept) _terminations.TryRemove(id, out _);
         _terminations[run] = (termination, now);
+    }
+
+    // Before the host replaces or removes a pod or container that ended, its reason is read and kept: it goes with the old one.
+    private async Task RememberEndingAsync(Guid run, CancellationToken ct)
+    {
+        try
+        {
+            Remember(run, (await ReadRunStateAsync(run, ct)).Ended);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex, "Could not ask the {Noun} of {Owner} why it ended before replacing it", Noun, run);
+        }
     }
 
     public async Task<RunTermination?> GetTerminationAsync(Guid ownerId, DateTimeOffset? since = null, CancellationToken ct = default)
@@ -471,15 +484,19 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     // The sign-in terminals open now, which the sweep must not take for leftovers.
     private readonly ConcurrentDictionary<string, byte> _signIns = new(StringComparer.Ordinal);
 
-    /// <summary>The installers and sign-in terminals ILD has open now, by name: no leftovers of a crash, and what a shutdown puts away.</summary>
-    protected IReadOnlySet<string> OpenSideEnvironments => _execNames.Values.Concat(_signIns.Keys).ToHashSet(StringComparer.Ordinal);
+    // The installers and sign-in terminals ILD has open now, by name: no leftovers of a crash, and what a shutdown puts away.
+    internal IReadOnlySet<string> OpenSideEnvironments => _execNames.Values.Concat(_signIns.Keys).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>What a host's shutdown does about the installers and sign-in terminals still open: <paramref name="remove"/> each by its name.</summary>
+    protected Task RemoveOpenSideEnvironmentsAsync(Func<string, Task> remove)
+        => Task.WhenAll(OpenSideEnvironments.Select(remove));
 
     // A chat's command goes to the container every chat shares, an installer's or sign-in's to its own, and a run's to the run's.
     private async Task<IExecStream> OpenExecStreamAsync(
         ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, bool asRoot, CancellationToken ct)
     {
         if (owner.Chat)
-            return await OpenExecInAsync(await EnsureChatAsync(ct), command, environment, stdin, tty, asRoot, ct);
+            return await OpenExecInAsync(await Chat.EnsureAsync(ct), command, environment, stdin, tty, asRoot, ct);
         if (_execNames.TryGetValue(owner.Id, out var other))
             return await OpenExecInAsync(other, command, environment, stdin, tty, asRoot, ct);
 
@@ -490,6 +507,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         catch (Exception ex)
         {
+            if (!ct.IsCancellationRequested) await RememberEndingAsync(owner.Id, ct);
             if (!await ReviveRunAsync(owner.Id, ex, ct)) throw;
             return await OpenExecInAsync(name, command, environment, stdin, tty, asRoot, ct);
         }
@@ -519,6 +537,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         if (await IsRunReadyAsync(owner, ct)) return environment;
 
         var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
+        await RememberEndingAsync(owner, ct);
         var undo = await MakeRunAsync(request, tools, ct);
         try
         {
@@ -753,12 +772,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// gate and skipped while a chat command in mode Off has the direct route open, since that connection would be no escape.
     /// </summary>
     private Task ProbeChatAsync(ExecOwner owner, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe probe)
-        => probe.ProbeAsync(async (host, port, token) =>
-        {
-            using var gate = await RouteGateAsync(owner, token);
-            if (_liveOff.Any(e => e.Value > 0 && e.Key.Chat) || await HasDirectRouteAsync(owner, token)) return null;
-            return await ConnectDirectlyAsync(owner, host, port, token);
-        }, CancellationToken.None, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope);
+        => probe.ProbeAsync((host, port, token) => Routes.WhileChatRouteClosedAsync(owner, t => ConnectDirectlyAsync(owner, host, port, t), token),
+            CancellationToken.None, ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope);
 
     /// <summary>Make the environment ready to work in: the run's home and the code the base repository has.</summary>
     private async Task PrepareAsync(Guid owner, RunEnvironmentRequest request, CancellationToken ct)
@@ -836,28 +851,28 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         var direct = command.NetworkMode == ILD.Data.Enums.NetworkMode.Off;
         if (!direct)
         {
-            await CloseDirectRouteIfUnusedAsync(owner, ct);
+            await Routes.CloseIfUnusedAsync(owner, ct);
             if (owner.Chat && Probe is { } probe && !probe.Probed(ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe.ChatScope))
                 _ = ProbeChatAsync(owner, probe);
-            return await StartRoutedAsync(command, owner, direct: false, ct);
+            return await StartRoutedAsync(command, owner, hold: null, ct);
         }
 
-        // Counted before the route is opened, so a proxied launch checking at the same moment sees it; the process owns the count once it runs.
-        _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
+        // The process owns the count once it runs.
+        var hold = await Routes.OpenForProcessAsync(owner, ct);
         try
         {
-            await OpenRouteAsync(owner, ct);
-            return await StartRoutedAsync(command, owner, direct: true, ct);
+            return await StartRoutedAsync(command, owner, hold, ct);
         }
         catch
         {
-            EndOff(owner);
+            hold.Dispose();
             throw;
         }
     }
 
-    private async Task<IRunProcess> StartRoutedAsync(RunCommand command, ExecOwner owner, bool direct, CancellationToken ct)
+    private async Task<IRunProcess> StartRoutedAsync(RunCommand command, ExecOwner owner, RouteHold? hold, CancellationToken ct)
     {
+        var direct = hold is not null;
         var psi = command.Start;
         await SyncForwardsAsync(owner, ct);
         var (fileName, arguments) = (psi.FileName, psi.ArgumentList.ToList());
@@ -875,7 +890,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
         var exec = await OpenExecOrRemoveFileAsync(owner, wrapped, execEnvironment, envFile, stdin: psi.RedirectStandardInput, tty: false, ct);
         return new ExecRunProcess(exec, Noun, id, psi.RedirectStandardInput, (commandId, token) => KillCommandAsync(owner, commandId, token),
-            direct ? () => EndOff(owner) : null, owner.Chat ? null : (since, ct) => GetTerminationAsync(owner.Id, since, ct));
+            hold is null ? null : hold.Dispose, owner.Chat ? null : (since, ct) => GetTerminationAsync(owner.Id, since, ct));
     }
 
     // -- The direct route (network mode Off) ---------------------------------------
@@ -883,62 +898,21 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>What the name of a process launched in network mode Off starts with, after its owner's directory in the run's process directory; kill-by-id reads it, the route never does.</summary>
     internal const string OffPrefix = "off-";
 
-    // Off processes this ILD has started and not seen end. This is the only thing that keeps a route open: nothing in the container is trusted,
-    // since the run writes its own process files. After a restart it is empty, so the next proxied launch closes the route.
-    // A process launched in mode Off is named so, which only kill-by-id reads.
-    private readonly ConcurrentDictionary<ExecOwner, int> _liveOff = new();
+    /// <summary>What the host does for a route that does not go through ILD's egress proxy (network mode Off).</summary>
+    protected abstract IDirectRouteEngine DirectRouteEngine { get; }
 
-    // Opening and closing a route are one at a time for a container or pod; every chat shares one.
-    private readonly ConcurrentDictionary<ExecOwner, SemaphoreSlim> _routeGates = new();
+    private DirectRoutes? _routes;
 
-    private async Task<IDisposable> RouteGateAsync(ExecOwner owner, CancellationToken ct)
-    {
-        var gate = _routeGates.GetOrAdd(owner.Chat ? new ExecOwner(Guid.Empty, true) : owner, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        return new Release(gate);
-    }
-
-    private sealed class Release(SemaphoreSlim gate) : IDisposable
-    {
-        public void Dispose() => gate.Release();
-    }
-
-    private void EndOff(ExecOwner owner) => _liveOff.AddOrUpdate(owner, 0, (_, n) => Math.Max(0, n - 1));
-
-    // The chats' route is their container's, which has to be there to be given one.
-    private async Task OpenRouteAsync(ExecOwner owner, CancellationToken ct)
-    {
-        using var gate = await RouteGateAsync(owner, ct);
-        if (owner.Chat) await EnsureChatAsync(ct);
-        await OpenDirectRouteAsync(owner, ct);
-    }
-
-    /// <summary>Give the run's pod or container a route to the network that does not go through ILD. Idempotent. The route is the pod's or container's, not a process's.</summary>
-    protected abstract Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct);
-
-    /// <summary>Take the direct route away. Idempotent, and nothing when there is none.</summary>
-    protected abstract Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct);
-
-    /// <summary>Whether the run's pod or container has the direct route now, as the engine or cluster says.</summary>
-    protected abstract Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct);
+    private DirectRoutes Routes => LazyInitializer.EnsureInitialized(ref _routes, () => new DirectRoutes(DirectRouteEngine, ct => Chat.EnsureAsync(ct)))!;
 
     /// <summary>The runs and the chat container that have a direct route now.</summary>
-    public abstract Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default);
-
-    private async Task CloseDirectRouteIfUnusedAsync(ExecOwner owner, CancellationToken ct)
-    {
-        using var gate = await RouteGateAsync(owner, ct);
-        if (!await HasDirectRouteAsync(owner, ct)) return;
-        // A chat container is every chat's, so one chat's Off process keeps it for all.
-        if (_liveOff.Any(e => e.Value > 0 && (owner.Chat ? e.Key.Chat : e.Key == owner))) return;
-        await CloseDirectRouteAsync(owner, ct);
-    }
+    public Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Routes.ListAsync(ct);
 
     /// <summary>
     /// The environment of a command in the run, merged by <see cref="CommandEnvironment"/>. The run's own defaults are nothing (its
     /// pod or container has its environment), or for a chat its toolchains. The host owns the home and the proxy, which in a proxied
     /// mode the run's network reaches only ILD through: a Cmd node or a preview needs it as much as an agent does. One in network mode Off has the
-    /// direct route (OpenDirectRouteAsync) and no proxy, as ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they
+    /// direct route (<see cref="IDirectRouteEngine.OpenAsync"/>) and no proxy, as ADR-0019 says: tools that ignore the proxy variables or are not HTTP work as they
     /// would on the machine itself. A caller's npm prefix is dropped: a run's own was set when its container was made, and a chat, which shares one, gets its own in its home.
     /// </summary>
     private async Task<CommandEnvironment> EnvironmentForAsync(RunCommand command, ExecOwner owner, CancellationToken ct)
@@ -1225,16 +1199,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             ?? throw new InvalidOperationException($"a terminal for a {Noun} needs a working directory in it");
 
         // The route as StartCommandAsync takes it: the terminal is a process of the run, and one opened in mode Off keeps the direct route until it ends.
-        var direct = mode == ILD.Data.Enums.NetworkMode.Off;
         var ptyHoldsRoute = false;
-        if (direct)
-            _liveOff.AddOrUpdate(owner, 1, (_, n) => n + 1);
+        RouteHold? hold = null;
+        if (mode == ILD.Data.Enums.NetworkMode.Off)
+            hold = await Routes.OpenForProcessAsync(owner, ct);
         else
-            await CloseDirectRouteIfUnusedAsync(owner, ct);
+            await Routes.CloseIfUnusedAsync(owner, ct);
         try
         {
-            if (direct) await OpenRouteAsync(owner, ct);
-
             var caller = CommandEnvironment.Of(options.Environment);
             caller.TryAdd("TERM", "xterm-256color");
             caller.TryAdd("ILD_API_URL", IldUrl);
@@ -1250,7 +1222,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             command.AddRange(options.CommandLine ?? []);
 
             var exec = await OpenExecOrRemoveFileAsync(owner, command, execEnvironment, envFile, stdin: true, tty: true, ct);
-            var pty = new ExecPty(exec, direct ? () => EndOff(owner) : null, () => EndTerminalAsync(owner, session));
+            var pty = new ExecPty(exec, hold is null ? null : hold.Dispose, () => EndTerminalAsync(owner, session));
             ptyHoldsRoute = true;
             try
             {
@@ -1265,7 +1237,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
         catch
         {
-            if (direct && !ptyHoldsRoute) EndOff(owner);
+            if (!ptyHoldsRoute) hold?.Dispose();
             throw;
         }
     }
@@ -1492,7 +1464,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default) => IsRunningAsync(environment.OwnerId, ct);
 
     /// <summary>Where the preview data repositories keep between runs is stored, on ILD's own disk. A run made with <see cref="RunEnvironmentRequest.KeepPreviewData"/> needs it.</summary>
-    public PreviewDataStore? PreviewData { get; set; }
+    public PreviewDataStore? PreviewData { get; init; }
 
     // The exit status of the pack script when the run has no copy to put back.
     private const int NoPreviewDataCopy = 3;
@@ -1744,166 +1716,24 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>How long the chat container may be idle before <see cref="ReapIdleChatAsync"/> removes it; zero never does.</summary>
     protected virtual TimeSpan ChatIdleTimeout => TimeSpan.Zero;
 
-    // Open chat work: execs (turns, commands, previews, clones) and holds. The reaper sets _chatRemoving, then reads the count;
-    // work adds to the count, then reads the flag (both Interlocked), so one of them always sees the other.
-    private int _chatOpen;
-    private long _chatLast;
-    private int _chatRemoving;
-    private int _removedForIdle;
+    /// <summary>What the host does for the pod or container every chat shares.</summary>
+    protected abstract IChatEngine ChatEngine { get; }
 
-    // Whether the reaper is about to remove, or removing, the chat container: EnsureChatAsync then waits for the gate instead of trusting what it sees.
-    private bool ChatBeingRemoved => Volatile.Read(ref _chatRemoving) != 0;
+    private ChatKeeper? _chat;
 
-    // Whether the chat container was removed for idleness and has not come back since; reads once.
-    private bool TakeRemovedForIdle() => Interlocked.Exchange(ref _removedForIdle, 0) != 0;
-
-    // Making and removing the chat container are one at a time.
-    private readonly SemaphoreSlim _chatGate = new(1, 1);
-
-    /// <summary>What the pod or container every chat shares is called.</summary>
-    protected abstract string ChatEnvironmentName { get; }
-
-    /// <summary>Whether the chat pod or container is up, and made from what ILD would make it from now.</summary>
-    protected abstract Task<bool> ChatIsUpAsync(CancellationToken ct);
-
-    /// <summary>
-    /// Make the chat pod or container and wait until it is ready, replacing one that stopped, ended or is no longer what ILD would
-    /// make. Its volume keeps the chats' folders through that. Called by one caller at a time, and reads for itself
-    /// what there is to replace: <see cref="ChatIsUpAsync"/> is called by many at once.
-    /// </summary>
-    protected abstract Task MakeChatAsync(CancellationToken ct);
-
-    /// <summary>Remove the chat pod or container, and nothing of what it mounts.</summary>
-    protected abstract Task RemoveChatAsync(CancellationToken ct);
-
-    /// <summary>The name of the chat pod or container, made first when it is not up.</summary>
-    private async Task<string> EnsureChatAsync(CancellationToken ct)
-    {
-        var name = ChatEnvironmentName;
-        if (!ChatBeingRemoved && await ChatIsUpAsync(ct)) return name;
-
-        await _chatGate.WaitAsync(ct);
-        try
-        {
-            if (await ChatIsUpAsync(ct)) return name;
-            await MakeChatAsync(ct);
-            if (TakeRemovedForIdle()) Logger?.LogInformation("The chat {Noun} {Name} is back, made for a chat after it was removed for idleness", Noun, name);
-            return name;
-        }
-        finally
-        {
-            _chatGate.Release();
-        }
-    }
-
-    private void BeginChatWork()
-    {
-        Interlocked.Increment(ref _chatOpen);
-        Interlocked.Exchange(ref _chatLast, Time.GetUtcNow().UtcTicks);
-    }
-
-    private void EndChatWork()
-    {
-        // Stamped first, so the reaper never sees no open work together with a stale time.
-        Interlocked.Exchange(ref _chatLast, Time.GetUtcNow().UtcTicks);
-        Interlocked.Decrement(ref _chatOpen);
-    }
-
-    // Idle: nothing open, and the last start or end was at least the timeout ago. The first look only starts the clock, for a
-    // container that was there before this ILD did.
-    private bool IsChatIdle()
-    {
-        var timeout = ChatIdleTimeout;
-        if (timeout <= TimeSpan.Zero || Volatile.Read(ref _chatOpen) != 0) return false;
-        var now = Time.GetUtcNow().UtcTicks;
-        if (Interlocked.CompareExchange(ref _chatLast, now, 0) == 0) return false;
-        return now - Interlocked.Read(ref _chatLast) >= timeout.Ticks;
-    }
+    private ChatKeeper Chat => LazyInitializer.EnsureInitialized(ref _chat, () => new ChatKeeper(ChatEngine, ChatIdleTimeout, Time, Noun, Logger))!;
 
     /// <summary>
     /// Removes the chat container or pod when it has been idle for the timeout; its volume or claim and network stay. Never
-    /// touches a run's container or pod: it goes by the chat container's name, not by what ILD manages. Under the chat's gate,
-    /// so it never interleaves with <see cref="EnsureChatAsync"/>.
+    /// touches a run's container or pod: it goes by the chat container's name, not by what ILD manages.
     /// </summary>
     public async Task ReapIdleChatAsync(CancellationToken ct = default)
     {
-        if (!HostsChats || !IsChatIdle()) return;
-
-        var name = ChatEnvironmentName;
-        await _chatGate.WaitAsync(ct);
-        try
-        {
-            if (!IsChatIdle() || !await RunExistsAsync(new ExecOwner(Guid.Empty, Chat: true), ct)) return;
-
-            Interlocked.Exchange(ref _chatRemoving, 1);
-            try
-            {
-                // Work that began after the check above, and before the flag, is seen here.
-                if (!IsChatIdle()) return;
-                await RemoveChatAsync(ct);
-                Interlocked.Exchange(ref _removedForIdle, 1);
-                Logger?.LogInformation("Removed the chat {Noun} {Name}: it was idle for {Minutes} minutes; the next chat makes it again", Noun, name, (int)ChatIdleTimeout.TotalMinutes);
-            }
-            finally
-            {
-                Interlocked.Exchange(ref _chatRemoving, 0);
-            }
-        }
-        finally
-        {
-            _chatGate.Release();
-        }
+        if (HostsChats) await Chat.ReapIdleAsync(ct);
     }
 
     /// <summary>Counts the chat that holds <paramref name="chatPath"/> as busy until the result is disposed.</summary>
-    public IDisposable HoldChat(string chatPath)
-    {
-        if (!HostsChats) return ChatWork.None;
-        BeginChatWork();
-        return new ChatWork(EndChatWork);
-    }
-
-    private sealed class ChatWork(Action? end) : IDisposable
-    {
-        public static readonly ChatWork None = new(null);
-        private Action? _end = end;
-
-        public void Dispose() => Interlocked.Exchange(ref _end, null)?.Invoke();
-    }
-
-    // Counts one chat exec as open until its command ends or the stream is disposed, whichever comes first.
-    private sealed class ChatExecStream : IExecStream
-    {
-        private readonly IExecStream _inner;
-        private readonly ChatWork _work;
-
-        public ChatExecStream(IExecStream inner, ChatWork work)
-        {
-            _inner = inner;
-            _work = work;
-            Status = Track(inner.Status);
-        }
-
-        public Stream Stdout => _inner.Stdout;
-        public Stream? Stderr => _inner.Stderr;
-        public Task<int?> Status { get; }
-
-        private async Task<int?> Track(Task<int?> status)
-        {
-            try { return await status.ConfigureAwait(false); }
-            finally { _work.Dispose(); }
-        }
-
-        public Task WriteStdinAsync(ReadOnlyMemory<byte> data, CancellationToken ct) => _inner.WriteStdinAsync(data, ct);
-        public Task CloseStdinAsync(CancellationToken ct = default) => _inner.CloseStdinAsync(ct);
-        public Task ResizeAsync(int cols, int rows, CancellationToken ct = default) => _inner.ResizeAsync(cols, rows, ct);
-
-        public void Dispose()
-        {
-            _inner.Dispose();
-            _work.Dispose();
-        }
-    }
+    public IDisposable HoldChat(string chatPath) => HostsChats ? Chat.Begin() : ChatWork.None;
 
     // -- Exec --------------------------------------------------------------------
 
@@ -1916,12 +1746,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         ExecOwner owner, IReadOnlyList<string> command, IReadOnlyDictionary<string, string>? environment, bool stdin, bool tty, CancellationToken ct)
     {
         // Counted before the stream is opened, since opening it is what makes the chat container when it is missing.
-        ChatWork? work = null;
-        if (owner.Chat)
-        {
-            BeginChatWork();
-            work = new ChatWork(EndChatWork);
-        }
+        ChatWork? work = owner.Chat ? Chat.Begin() : null;
         try
         {
             var stream = await OpenExecStreamAsync(owner, command, environment, stdin, tty, asRoot: false, ct);

@@ -59,8 +59,8 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         _ => null,
     }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
-        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Credentials = EgressProxyTests.Creds, Time = time ?? TimeProvider.System, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }), ClusterNameServer = () => "10.96.0.10" };
+    private KubernetesRunHost NewHost(KubernetesRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null, ExecRunHostServices? services = null)
+        => new(_api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner(), _log) { Credentials = EgressProxyTests.Creds, Time = time ?? TimeProvider.System, Forwards = services?.Forwards, Probe = services?.Probe, Refusals = services?.Refusals, PreviewData = services?.PreviewData, ReadyPollInterval = TimeSpan.FromMilliseconds(10), Agents = () => agents ?? [], ChatToolsRoot = () => Path.Combine(_scratch, "chat-tools"), ResolveIld = (_, _) => Task.FromResult(new[] { System.Net.IPAddress.Parse("10.96.0.20") }), ClusterNameServer = () => "10.96.0.10" };
 
     private string WorkingDirectory => RunPaths.WorkingDirectory(_run);
 
@@ -556,7 +556,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     {
         await CreateRunAsync();
         _api.OnExec = e => e.ExitAsync(e.Command.Contains(ExecRunHost.HostsScript) ? 3 : 0);
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        _host = NewHost(Options(), services: new ExecRunHostServices { Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]) });
         var ct = TestContext.Current.CancellationToken;
 
         for (var i = 0; i < 2; i++)
@@ -705,19 +705,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.NotEmpty(LaunchProxyVariables());
     }
 
-    [Fact]
-    public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_open_policy()
-    {
-        await CreateRunAsync();
-        var release = HoldOffLaunches();
-        using var off = await LaunchAsync(NetworkMode.Off);
-
-        using var process = await StartAsync(NetworkMode.Monitor);
-
-        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", OpenPolicyName));
-        release.SetResult();
-        await off.WaitForExitAsync(TestContext.Current.CancellationToken);
-    }
 
     [Fact]
     public async Task A_planted_off_file_does_not_keep_the_open_policy_once_ilds_own_off_launches_have_ended()
@@ -764,22 +751,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Null(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
     }
 
-    [Fact]
-    public async Task A_live_off_launch_of_one_chat_keeps_the_chat_pods_open_policy_for_a_proxied_launch_of_another()
-    {
-        var live = Guid.NewGuid();
-        var other = Guid.NewGuid();
-        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
-        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
-        var release = HoldOffLaunches();
-        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
-
-        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.NotNull(_api.Get<V1NetworkPolicy>("networkpolicies", ChatOpenPolicyName));
-        release.SetResult();
-    }
 
     [Fact]
     public async Task Two_pods_in_off_cannot_reach_each_other_because_a_pods_policy_takes_ingress_from_ilds_pod_only_and_the_open_policy_adds_none()

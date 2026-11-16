@@ -11,6 +11,7 @@ using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
 using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Container;
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.RunHosts.Kubernetes;
 using ILD.Core.Services.RunHosts.Local;
 using ILD.Api.Middleware;
@@ -83,24 +84,26 @@ public static class ServiceCollectionExtensions
             if (kind == RunHostKind.Local) return local;
 
             var loggers = sp.GetRequiredService<ILoggerFactory>();
-            var host = kind == RunHostKind.Kubernetes
-                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials)
-                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials);
-            host.Isolated.Probe = sp.GetRequiredService<NetworkEnforcementProbe>();
-            host.Isolated.Refusals = sp.GetRequiredService<InstallerRefusals>();
-            // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
-            host.Isolated.PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>())
+            var services = new ExecRunHostServices
             {
-                MaxArchiveBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(name => config[name]).MaxPreviewDataBytes,
+                Probe = sp.GetRequiredService<NetworkEnforcementProbe>(),
+                Refusals = sp.GetRequiredService<InstallerRefusals>(),
+                // The lasting copy of the preview data repositories keep; each run works on a copy of its own.
+                PreviewData = new PreviewDataStore(PreviewVolumes.Root(config), sp.GetRequiredService<ILogger<PreviewDataStore>>())
+                {
+                    MaxArchiveBytes = ILD.Core.Services.RunHosts.RunReadLimits.FromEnvironment(name => config[name]).MaxPreviewDataBytes,
+                },
+                // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
+                Forwards = async ct =>
+                {
+                    using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                    var rows = await scope.ServiceProvider.GetRequiredService<INetworkForwardStore>().GetForwardsAsync(ct);
+                    return rows.Select(r => new RunForward(r.LocalPort, r.Host, r.Port)).ToList();
+                },
             };
-            // The declared forwards, answered on each run's and chat's own loopback (docs/adr/0020).
-            host.Isolated.Forwards = async ct =>
-            {
-                using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
-                var rows = await scope.ServiceProvider.GetRequiredService<INetworkForwardStore>().GetForwardsAsync(ct);
-                return rows.Select(r => new ILD.Core.Services.RunHosts.Isolated.RunForward(r.LocalPort, r.Host, r.Port)).ToList();
-            };
-            return host;
+            return kind == RunHostKind.Kubernetes
+                ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials, services)
+                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials, services);
         });
         // Before GracefulRunDrainService, so it stops after the drain has parked the runs.
         services.AddHostedService<RunHostShutdownService>();

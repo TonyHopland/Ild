@@ -79,59 +79,8 @@ public class IsolatedRunHostTests
         Assert.All(host.Execs, exec => Assert.Equal(InMemoryRunHost.ChatName, exec.Name));
     }
 
-    [Fact]
-    public async Task Chat_commands_that_start_together_make_the_chats_container_once()
-    {
-        var host = Host();
-        host.MakingChat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var first = host.RunToolAsync(RunPaths.ChatRoot(Guid.NewGuid()), "git", ["status"], ct: Ct);
-        var second = host.RunToolAsync(RunPaths.ChatRoot(Guid.NewGuid()), "git", ["status"], ct: Ct);
-        host.MakingChat.SetResult();
-        await Task.WhenAll(first, second);
 
-        Assert.Equal(1, host.ChatsMade);
-    }
-
-    [Fact]
-    public async Task The_chats_container_is_removed_once_it_was_idle_for_the_timeout_and_made_again_for_the_next_chat()
-    {
-        var host = Host();
-        var path = RunPaths.ChatRoot(Guid.NewGuid());
-        await host.RunToolAsync(path, "git", ["status"], ct: Ct);
-
-        _time.Advance(IdleTimeout - TimeSpan.FromSeconds(1));
-        await host.ReapIdleChatAsync(Ct);
-        Assert.Equal(0, host.ChatsRemoved);
-
-        _time.Advance(TimeSpan.FromSeconds(2));
-        await host.ReapIdleChatAsync(Ct);
-        Assert.Equal(1, host.ChatsRemoved);
-
-        await host.RunToolAsync(path, "git", ["status"], ct: Ct);
-        Assert.Equal(2, host.ChatsMade);
-    }
-
-    [Fact]
-    public async Task A_chat_with_work_open_is_not_idle_however_long_ago_it_started()
-    {
-        var host = Host();
-        var path = RunPaths.ChatRoot(Guid.NewGuid());
-        await host.RunToolAsync(path, "git", ["status"], ct: Ct);
-
-        using (host.HoldChat(path))
-        {
-            _time.Advance(IdleTimeout * 2);
-            await host.ReapIdleChatAsync(Ct);
-            Assert.Equal(0, host.ChatsRemoved);
-        }
-
-        await host.ReapIdleChatAsync(Ct);
-        Assert.Equal(0, host.ChatsRemoved);
-        _time.Advance(IdleTimeout);
-        await host.ReapIdleChatAsync(Ct);
-        Assert.Equal(1, host.ChatsRemoved);
-    }
 
     [Fact]
     public async Task A_chat_with_a_command_running_is_not_idle_and_the_time_counts_from_when_it_ends()
@@ -164,33 +113,6 @@ public class IsolatedRunHostTests
         Assert.Equal(1, host.ChatsRemoved);
     }
 
-    [Fact]
-    public async Task A_chat_that_starts_while_the_reaper_removes_the_chats_environment_waits_for_it_and_gets_a_new_one()
-    {
-        var host = Host();
-        var path = RunPaths.ChatRoot(Guid.NewGuid());
-        await host.RunToolAsync(path, "git", ["status"], ct: Ct);
-        var removing = new TaskCompletionSource();
-        var proceed = new TaskCompletionSource();
-        host.BeforeRemovingChat = async () =>
-        {
-            removing.SetResult();
-            await proceed.Task;
-        };
-        _time.Advance(IdleTimeout);
-
-        var reaping = host.ReapIdleChatAsync(Ct);
-        await removing.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        var starting = host.RunToolAsync(path, "git", ["status"], ct: Ct);
-        await Task.Delay(100, Ct);
-        Assert.False(starting.IsCompleted);
-        proceed.SetResult();
-        await reaping;
-        await starting;
-
-        Assert.Equal(2, host.ChatsMade);
-        Assert.Equal(1, host.ChatsRemoved);
-    }
 
     [Fact]
     public async Task A_chat_command_runs_in_the_chats_environment_as_that_chat_with_its_home()

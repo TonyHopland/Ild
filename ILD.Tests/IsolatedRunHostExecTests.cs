@@ -35,8 +35,8 @@ public sealed class IsolatedRunHostExecTests : IDisposable
         if (Directory.Exists(_scratch)) Directory.Delete(_scratch, recursive: true);
     }
 
-    private static InMemoryRunHost NewHost(bool environmentInAFile = false, string? ildAddress = null)
-        => new() { Credentials = EgressProxyTests.Creds, EnvironmentInAFile = environmentInAFile, IldAddress = ildAddress ?? "http://ild.example:8080" };
+    private static InMemoryRunHost NewHost(bool environmentInAFile = false, string? ildAddress = null, Func<CancellationToken, Task<IReadOnlyList<RunForward>>>? forwards = null)
+        => new() { Credentials = EgressProxyTests.Creds, EnvironmentInAFile = environmentInAFile, IldAddress = ildAddress ?? "http://ild.example:8080", Forwards = forwards };
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -186,9 +186,8 @@ public sealed class IsolatedRunHostExecTests : IDisposable
     [Fact]
     public async Task A_command_starts_with_the_declared_forwards_answering_on_the_runs_loopback_through_the_proxy()
     {
-        var host = NewHost();
-        host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>(
-            [new(15432, "postgres", 5432), new(16379, "bad,host", 6379)]);
+        var host = NewHost(forwards: _ => Task.FromResult<IReadOnlyList<RunForward>>(
+            [new(15432, "postgres", 5432), new(16379, "bad,host", 6379)]));
 
         await RunAsync(host, RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run));
 
@@ -210,8 +209,7 @@ public sealed class IsolatedRunHostExecTests : IDisposable
     [Fact]
     public async Task ILDs_own_scripts_start_with_a_fixed_environment_and_the_runs_own_command_does_not()
     {
-        var host = NewHost();
-        host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        var host = NewHost(forwards: _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]));
 
         await RunAsync(host, RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run));
         await host.GetFileLengthAsync($"{WorkingDirectory}/file", Ct);
@@ -227,9 +225,8 @@ public sealed class IsolatedRunHostExecTests : IDisposable
     [Fact]
     public async Task With_no_forwards_a_command_costs_no_extra_exec_until_one_was_given_then_its_relays_are_stopped()
     {
-        var host = NewHost();
         IReadOnlyList<RunForward> forwards = [];
-        host.Forwards = _ => Task.FromResult(forwards);
+        var host = NewHost(forwards: _ => Task.FromResult(forwards));
 
         await RunAsync(host, RunCommand.Prepared(Command(WorkingDirectory, "a"), _run));
         Assert.DoesNotContain(host.Execs, e => e.Command.Contains(ExecRunHost.ForwardsScript));

@@ -11,7 +11,7 @@ namespace ILD.Tests.Fakes;
 /// <see cref="InMemoryExec"/> that <see cref="OnExec"/> answers, and what the engine was asked is kept in lists. For what the
 /// host does whichever engine holds its runs; what an engine does is tested against that engine's own fake.
 /// </summary>
-internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
+internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null), IDirectRouteEngine, IChatEngine
 {
     public const string ChatName = "chat";
     public const string Address = "10.9.0.7";
@@ -31,7 +31,6 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     protected override Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct) => Task.FromResult(new RunState(RunPresent, RunEndedBy));
 
-    public void RememberTermination(Guid run, RunTermination termination) => Remember(run, termination);
 
     /// <summary>What a command does once it is started. By default it reads its input to the end and exits 0.</summary>
     public Func<InMemoryExec, Task> OnExec { get; set; } = async exec =>
@@ -45,10 +44,6 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public bool Revives { get; set; }
     public Exception? SignInFailure { get; set; }
-    public TaskCompletionSource? MakingChat { get; set; }
-
-    /// <summary>What happens as the chat environment is about to be removed, before it is.</summary>
-    public Func<Task>? BeforeRemovingChat { get; set; }
 
     public IReadOnlyList<InMemoryExec> Execs { get { lock (_gate) return _execs.ToList(); } }
     public List<Guid> Revived { get; } = [];
@@ -131,21 +126,23 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
 
     public override bool HostsChats => true;
     protected override TimeSpan ChatIdleTimeout => IdleTimeout;
-    protected override string ChatEnvironmentName => ChatName;
-    protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => Task.FromResult(_chatUp);
+    protected override IChatEngine ChatEngine => this;
+    string IChatEngine.Name => ChatName;
+    Task<bool> IChatEngine.IsUpAsync(CancellationToken ct) => Task.FromResult(_chatUp);
+    Task<bool> IChatEngine.ExistsAsync(CancellationToken ct) => Task.FromResult(_chatUp);
 
-    protected override async Task MakeChatAsync(CancellationToken ct)
+    Task IChatEngine.MakeAsync(CancellationToken ct)
     {
-        if (MakingChat is { } making) await making.Task.WaitAsync(ct);
         ChatsMade++;
         _chatUp = true;
+        return Task.CompletedTask;
     }
 
-    protected override async Task RemoveChatAsync(CancellationToken ct)
+    Task IChatEngine.RemoveAsync(CancellationToken ct)
     {
-        if (BeforeRemovingChat is { } before) await before();
         ChatsRemoved++;
         _chatUp = false;
+        return Task.CompletedTask;
     }
 
     protected override Task<bool> RunExistsAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(owner.Chat ? _chatUp : HoldsRun(owner.Id));
@@ -165,10 +162,11 @@ internal sealed class InMemoryRunHost() : ExecRunHost(new ProcessRunner(), null)
     protected override string ToolZoneName(RunToolMount zone) => zone.Zone.ToString();
     protected override Task StartToolInstallerAsync(string name, Guid id, ToolInstaller installer, CancellationToken ct) => Task.CompletedTask;
     protected override Task RemoveToolInstallerAsync(string name) => Task.CompletedTask;
-    protected override Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-    protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
-    protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
-    public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
+    protected override IDirectRouteEngine DirectRouteEngine => this;
+    Task IDirectRouteEngine.OpenAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
+    Task IDirectRouteEngine.CloseAsync(ExecOwner owner, CancellationToken ct) => Task.CompletedTask;
+    Task<bool> IDirectRouteEngine.HasAsync(ExecOwner owner, CancellationToken ct) => Task.FromResult(false);
+    Task<IReadOnlyList<DirectRoute>> IDirectRouteEngine.ListAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
     // -- Sweep: what the engine finds, and what it is asked to delete ----------------------
 
     /// <summary>What the engine says it holds; the policy decides which of it is a leftover.</summary>
