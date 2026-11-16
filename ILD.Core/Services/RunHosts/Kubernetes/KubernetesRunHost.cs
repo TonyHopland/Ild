@@ -87,7 +87,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     // -- Lifecycle ---------------------------------------------------------------
 
-    protected override string RunEnvironmentName(Guid run) => KubernetesNames.ObjectName(run);
+    protected override string RunEnvironmentName(Guid run) => RunNames.Run(run);
 
     protected override Task<bool> IsRunReadyAsync(Guid run, CancellationToken ct) => IsHealthyAsync(run, ct);
 
@@ -104,7 +104,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.Policy(owner, reference, request.Dns), _namespace, cancellationToken: ct));
             var ildAddress = request.Dns && RunFacingHost(new Uri(_options.IldUrl).Host) == new Uri(_options.IldUrl).Host ? null : await IldAddressAsync(ct);
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.Pod(owner, reference, tools, ildAddress, request.Dns, NameServer()), _namespace, cancellationToken: ct));
-            var pod = await WaitReadyAsync(KubernetesNames.ObjectName(owner), $"run {owner:N}", ct);
+            var pod = await WaitReadyAsync(RunNames.Run(owner), $"run {owner:N}", ct);
             _podAddresses[owner] = pod.Status.PodIP;
         }
         catch
@@ -132,13 +132,13 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     /// </summary>
     private async Task<bool> TearDownRunAsync(Guid owner, CancellationToken ct)
     {
-        var name = KubernetesNames.ObjectName(owner);
+        var name = RunNames.Run(owner);
         if (!await RemovePodAsync(name, ct)) return false;
         var options = new V1DeleteOptions { PropagationPolicy = "Background" };
         // The owner takes whatever carries a reference to it; each is also deleted by name for a leftover whose owner is already gone.
         await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedConfigMapAsync(name, _namespace, options, cancellationToken: ct));
         await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(name, _namespace, options, cancellationToken: ct));
-        await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(KubernetesNames.OpenName(name), _namespace, options, cancellationToken: ct));
+        await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(RunNames.OpenPolicy(name), _namespace, options, cancellationToken: ct));
         await IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(name, _namespace, options, cancellationToken: ct));
         return true;
     }
@@ -162,7 +162,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     {
         try
         {
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(RunNames.Run(owner), _namespace, cancellationToken: ct);
             if (!IsReady(pod)) return false;
             _podAddresses[owner] = pod.Status.PodIP;
             return true;
@@ -181,14 +181,14 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
         {
-            return (await _client.CoreV1.ReadNamespacedConfigMapAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct), false);
+            return (await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(owner), _namespace, cancellationToken: ct), false);
         }
     }
 
     /// <summary>Deletes the pod when it has ended or is going away, and waits until it is gone, so a new one can take its name.</summary>
     private async Task RemoveEndedRunPodAsync(Guid owner, CancellationToken ct)
     {
-        var name = KubernetesNames.ObjectName(owner);
+        var name = RunNames.Run(owner);
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
         Remember(owner, TerminationOf(pod));
@@ -197,7 +197,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     protected override async Task<RunState> ReadRunStateAsync(Guid run, CancellationToken ct)
     {
-        var pod = await ReadPodOrNullAsync(KubernetesNames.ObjectName(run), ct);
+        var pod = await ReadPodOrNullAsync(RunNames.Run(run), ct);
         return pod is null ? new RunState(Found: false, Ended: null) : new RunState(Found: true, TerminationOf(pod));
     }
 
@@ -240,7 +240,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     /// </summary>
     private async Task<bool> ReplaceEndedRunPodAsync(Guid owner, CancellationToken ct)
     {
-        var name = KubernetesNames.ObjectName(owner);
+        var name = RunNames.Run(owner);
         await _runPodGate.WaitAsync(ct);
         try
         {
@@ -393,7 +393,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     {
         if (!_podAddresses.TryGetValue(owner, out var address))
         {
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(KubernetesNames.ObjectName(owner), _namespace, cancellationToken: ct);
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(RunNames.Run(owner), _namespace, cancellationToken: ct);
             address = pod.Status?.PodIP is { Length: > 0 } ip ? ip : throw new InvalidOperationException($"the pod of run {owner:N} has no address yet");
             _podAddresses[owner] = address;
         }
@@ -405,7 +405,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         // A chat pod that is not there has nothing running to kill, and asking would make it.
         try
         {
-            var pod = await _client.CoreV1.ReadNamespacedPodAsync(owner.Chat ? ChatPodName : KubernetesNames.ObjectName(owner.Id), _namespace, cancellationToken: ct);
+            var pod = await _client.CoreV1.ReadNamespacedPodAsync(owner.Chat ? ChatPodName : RunNames.Run(owner.Id), _namespace, cancellationToken: ct);
             return !owner.Chat || IsReady(pod);
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
@@ -426,7 +426,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     // -- Direct route (network mode Off) ------------------------------------------
 
-    private string PolicyOf(ExecOwner owner) => KubernetesNames.OpenName(owner.Chat ? ChatPodName : KubernetesNames.ObjectName(owner.Id));
+    private string PolicyOf(ExecOwner owner) => RunNames.OpenPolicy(owner.Chat ? ChatPodName : RunNames.Run(owner.Id));
 
     protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
     {
@@ -435,7 +435,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.ChatOpenPolicy(), _namespace, cancellationToken: ct));
             return;
         }
-        var ownerObject = await _client.CoreV1.ReadNamespacedConfigMapAsync(KubernetesNames.ObjectName(owner.Id), _namespace, cancellationToken: ct);
+        var ownerObject = await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(owner.Id), _namespace, cancellationToken: ct);
         await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(
             _manifests.OpenPolicy(owner.Id, KubernetesManifests.OwnerReference(ownerObject)), _namespace, cancellationToken: ct));
     }
@@ -459,7 +459,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     public override async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default)
     {
         var policies = await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
-            _namespace, labelSelector: $"{KubernetesNames.SelectorFor(_options.Instance)},{RunPaths.RoleLabel}={RunPaths.OpenRole}", cancellationToken: ct);
+            _namespace, labelSelector: RunNames.Selector(_options.Instance, RunPaths.OpenRole), cancellationToken: ct);
         return policies.Items
             .Select(p => p.Metadata.Labels.TryGetValue(RunPaths.RunLabel, out var run) && Guid.TryParseExact(run, "N", out var id)
                 ? new DirectRoute(id, Chat: false)
@@ -469,7 +469,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     // -- Chats -------------------------------------------------------------------
 
-    private string ChatPodName => KubernetesNames.ChatName(_options.Instance);
+    private string ChatPodName => RunNames.Chat(_options.Instance);
 
     protected override string ChatEnvironmentName => ChatPodName;
 
@@ -496,7 +496,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         {
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPersistentVolumeClaimAsync(_manifests.ChatClaim(), _namespace, cancellationToken: ct));
             // A new pod starts with no direct route, whatever the one before it had.
-            await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(KubernetesNames.OpenName(ChatPodName), _namespace, cancellationToken: ct));
+            await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(RunNames.OpenPolicy(ChatPodName), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.NetworkingV1.CreateNamespacedNetworkPolicyAsync(_manifests.ChatPolicy(), _namespace, cancellationToken: ct));
             await CreateIfMissingAsync(() => _client.CoreV1.CreateNamespacedPodAsync(_manifests.ChatPod(_chatIldAddress, NameServer()), _namespace, cancellationToken: ct));
         }
@@ -535,8 +535,9 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     // Whether the chat pod was made from the spec ILD would make it from now.
     private bool IsCurrent(V1Pod pod)
-        => pod.Metadata.Annotations?.TryGetValue(KubernetesNames.SpecAnnotation, out var spec) == true
-            && spec == (_chatSpec ??= KubernetesManifests.SpecOf(_manifests.ChatPod(_chatIldAddress, NameServer())));
+        => ChatSpecStamp.IsCurrent(
+            pod.Metadata.Annotations is { } annotations && annotations.TryGetValue(ChatSpecStamp.Key, out var stored) ? stored : null,
+            _chatSpec ??= _manifests.ChatPod(_chatIldAddress, NameServer()).Metadata.Annotations[ChatSpecStamp.Key]);
 
     /// <summary>Deletes a chat pod made from another runner image or other settings, so it is not left running until the next chat.</summary>
     internal async Task RetireStaleChatPodAsync(CancellationToken ct)
@@ -613,7 +614,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     /// <summary>The IPs of every pod ILD made (runs, the chat pod, installers, sign-ins): a cluster has no network of its own per run, so these are what a run must not reach.</summary>
     public override async Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default)
     {
-        var pods = await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: KubernetesNames.SelectorFor(_options.Instance), cancellationToken: ct);
+        var pods = await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct);
         return pods.Items
             .SelectMany(p => (p.Status?.PodIPs?.Select(i => i.Ip) ?? []).Append(p.Status?.PodIP))
             .Distinct()
@@ -640,108 +641,65 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     // -- Sweep -------------------------------------------------------------------
 
-    public override async Task<IReadOnlyList<RunLeftover>> ListLeftoversAsync(IReadOnlySet<Guid> liveIds, CancellationToken ct = default)
+    protected override bool IsEngineFailure(Exception ex) => ex is HttpOperationException or HttpRequestException;
+
+    protected override bool IsOpenRoute(string location) => location == RunNames.OpenPolicy(ChatPodName);
+
+    protected override async Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct)
     {
-        try
+                var runs = new List<string>();
+        void Collect(IEnumerable<IMetadata<V1ObjectMeta>> items)
         {
-            var retained = await RetainedRuns(ct);
-            var selector = KubernetesNames.SelectorFor(_options.Instance);
-            var runs = new HashSet<string>(StringComparer.Ordinal);
-            void Collect(IEnumerable<IMetadata<V1ObjectMeta>> items)
-            {
-                foreach (var item in items)
-                    if (item.Metadata.Labels is { } labels && labels.TryGetValue(RunPaths.RunLabel, out var run))
-                        runs.Add(run);
-            }
-
-            Collect((await _client.CoreV1.ListNamespacedConfigMapAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-            Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-            Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-            Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: selector, cancellationToken: ct)).Items);
-            // Sign-in and installer pods carry no run label; those ILD has not got open are left by a crash.
-            var open = OpenSideEnvironments;
-            var signIns = new List<string?>();
-            foreach (var role in new[] { KubernetesNames.SignInRole, RunPaths.ToolsRole })
-                signIns.AddRange((await _client.CoreV1.ListNamespacedPodAsync(
-                        _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
-                    .Select(p => p.Metadata.Name)
-                    .Where(n => n is not null && !open.Contains(n)));
-            // An installer's or sign-in's NetworkPolicy goes with its pod; one left without a pod is a leftover of its own.
-            foreach (var role in new[] { KubernetesNames.SignInRole, RunPaths.ToolsRole })
-                signIns.AddRange((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
-                        _namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={role}", cancellationToken: ct)).Items
-                    .Select(p => p.Metadata.Name)
-                    .Where(n => n is not null && !open.Contains(n) && !signIns.Contains(n)));
-
-            // The chat's direct route belongs to its pod, which has no owner reference to take the policy with it.
-            if ((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: $"{selector},{RunPaths.RoleLabel}={RunPaths.OpenRole}", cancellationToken: ct)).Items
-                    .Any(p => p.Metadata.Name == KubernetesNames.OpenName(ChatPodName))
-                && await ChatPodStateAsync(ct) is null)
-                signIns.Add(KubernetesNames.OpenName(ChatPodName));
-
-            return runs
-                .Where(run => !Guid.TryParseExact(run, "N", out var id) || !liveIds.Contains(id) && !retained.Contains(id))
-                .Select(run => new RunLeftover(RunLeftoverKind, run))
-                .Concat(signIns.Select(n => new RunLeftover(RunLeftoverKind, n!)))
-                .ToList();
+            foreach (var item in items)
+                if (item.Metadata.Labels is { } labels && labels.TryGetValue(RunPaths.RunLabel, out var run))
+                    runs.Add(run);
         }
-        catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
-        {
-            Logger?.LogWarning(ex, "Could not list the pods runs left in namespace {Namespace}; the next sweep tries again", _namespace);
-            return [];
-        }
+
+        Collect((await _client.CoreV1.ListNamespacedConfigMapAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.CoreV1.ListNamespacedPodAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.CoreV1.ListNamespacedPersistentVolumeClaimAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+        Collect((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance), cancellationToken: ct)).Items);
+
+        // Sign-in and installer pods carry no run label; an installer's or sign-in's NetworkPolicy goes with its pod, and one left without a pod is found by its role.
+        var sideEnvironments = new List<SideEnvironmentFact>();
+        foreach (var role in new[] { RunPaths.SignInRole, RunPaths.ToolsRole })
+            sideEnvironments.AddRange((await _client.CoreV1.ListNamespacedPodAsync(
+                    _namespace, labelSelector: RunNames.Selector(_options.Instance, role), cancellationToken: ct)).Items
+                .Where(p => p.Metadata.Name is not null).Select(p => new SideEnvironmentFact(p.Metadata.Name, role)));
+        foreach (var role in new[] { RunPaths.SignInRole, RunPaths.ToolsRole })
+            sideEnvironments.AddRange((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
+                    _namespace, labelSelector: RunNames.Selector(_options.Instance, role), cancellationToken: ct)).Items
+                .Where(p => p.Metadata.Name is not null).Select(p => new SideEnvironmentFact(p.Metadata.Name, role)));
+
+        // The chat's direct route belongs to its pod, which has no owner reference to take the policy with it.
+        var chatRoute = RunNames.OpenPolicy(ChatPodName);
+        var openRoutes = new List<OpenRouteFact>();
+        if ((await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(_namespace, labelSelector: RunNames.Selector(_options.Instance, RunPaths.OpenRole), cancellationToken: ct)).Items
+                .Any(p => p.Metadata.Name == chatRoute))
+            openRoutes.Add(new OpenRouteFact(chatRoute, Unused: await ChatPodStateAsync(ct) is null));
+        return new SweepFacts(runs, sideEnvironments, openRoutes);
     }
 
-    public override async Task<bool> DeleteLeftoverAsync(RunLeftover leftover, CancellationToken ct = default)
+    // The pod first, and its policy only once it is gone.
+    protected override async Task<bool> DeleteSideEnvironmentAsync(string name, bool isInstaller, CancellationToken ct)
     {
-        if (leftover.Kind != RunLeftoverKind)
-            throw new ArgumentException($"unknown leftover kind '{leftover.Kind}'", nameof(leftover));
-        if (leftover.Location.StartsWith("ild-signin-", StringComparison.Ordinal) || leftover.Location.StartsWith("ild-tools-", StringComparison.Ordinal))
-        {
-            try
-            {
-                // The pod first, and its policy only once it is gone.
-                if (!await RemovePodAsync(leftover.Location, ct)) return false;
-                await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(leftover.Location, _namespace, cancellationToken: ct));
-                return true;
-            }
-            catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
-            {
-                Logger?.LogWarning(ex, "Could not delete the sign-in or installer pod {Name}; the next sweep tries again", leftover.Location);
-                return false;
-            }
-        }
-        if (leftover.Location == KubernetesNames.OpenName(ChatPodName))
-        {
-            try
-            {
-                await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(leftover.Location, _namespace, cancellationToken: ct));
-                return true;
-            }
-            catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
-            {
-                Logger?.LogWarning(ex, "Could not delete the chat pod's open NetworkPolicy {Name}; the next sweep tries again", leftover.Location);
-                return false;
-            }
-        }
-        if (!Guid.TryParseExact(leftover.Location, "N", out var owner))
-            return false;
+        if (!await RemovePodAsync(name, ct)) return false;
+        await IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(name, _namespace, cancellationToken: ct));
+        return true;
+    }
 
-        try
+    protected override Task DeleteOpenRouteAsync(string name, CancellationToken ct)
+        => IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(name, _namespace, cancellationToken: ct));
+
+    protected override async Task<bool> DeleteRunAsync(Guid run, CancellationToken ct)
+    {
+        if (!await TearDownRunAsync(run, ct))
         {
-            if (!await TearDownRunAsync(owner, ct))
-            {
-                Logger?.LogWarning("The pod of run {Run} is still there; its NetworkPolicies stay until it is gone and the next sweep tries again", owner);
-                return false;
-            }
-            _podAddresses.TryRemove(owner, out _);
-            return true;
-        }
-        catch (Exception ex) when (ex is HttpOperationException or HttpRequestException)
-        {
-            Logger?.LogWarning(ex, "Could not delete the objects of run {Run}; the next sweep tries again", owner);
+            Logger?.LogWarning("The pod of run {Run} is still there; its NetworkPolicies stay until it is gone and the next sweep tries again", run);
             return false;
         }
+        _podAddresses.TryRemove(run, out _);
+        return true;
     }
 
     /// <summary>

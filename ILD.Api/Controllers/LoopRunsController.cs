@@ -746,7 +746,7 @@ public class LoopRunsController : ControllerBase
         if (!await host.DirectoryExistsAsync(run.WorktreePath!, HttpContext.RequestAborted))
             return BadRequest(new { error = "Run has no live worktree." });
 
-        return Ok(new { containerName = ContainerRunHost.ObjectName(owner), folder = run.WorktreePath });
+        return Ok(new { containerName = RunNames.Run(owner), folder = run.WorktreePath });
     }
 
     /// <summary>

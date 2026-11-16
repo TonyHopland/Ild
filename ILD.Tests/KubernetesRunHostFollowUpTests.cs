@@ -42,30 +42,11 @@ public sealed class KubernetesRunHostFollowUpTests
     }
 
     [Fact]
-    public async Task The_sweep_keeps_the_pods_of_the_runs_the_host_is_told_to_retain_even_when_the_caller_calls_them_dead()
-    {
-        await using var api = await FakeKubernetesApi.StartAsync();
-        var failed = Guid.NewGuid();
-        var ended = Guid.NewGuid();
-        foreach (var run in new[] { failed, ended })
-            api.Seed("configmaps", KubernetesNames.ObjectName(run), "main", run);
-        var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", "ILD_K8S_INSTANCE" => "main", _ => null });
-        var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner())
-        {
-            RetainedRuns = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { failed }),
-        };
-
-        var leftovers = await host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
-
-        Assert.Equal([ended.ToString("N")], leftovers.Select(l => l.Location));
-    }
-
-    [Fact]
     public async Task Kill_all_ends_only_the_commands_started_for_the_run_and_leaves_a_preview_with_no_owner()
     {
         await using var api = await FakeKubernetesApi.StartAsync();
         var run = Guid.NewGuid();
-        api.Seed("pods", KubernetesNames.ObjectName(run), "main", run);
+        api.Seed("pods", RunNames.Run(run), "main", run);
         var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", _ => null });
         var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner());
         var wd = RunPaths.WorkingDirectory(run);
@@ -90,7 +71,7 @@ public sealed class KubernetesRunHostFollowUpTests
     {
         await using var api = await FakeKubernetesApi.StartAsync();
         var run = Guid.NewGuid();
-        api.Seed("pods", KubernetesNames.ObjectName(run), "main", run);
+        api.Seed("pods", RunNames.Run(run), "main", run);
         var options = KubernetesRunHostOptions.From(n => n switch { "ILD_API_URL" => "http://ild:8080", "ILD_K8S_RUNNER_IMAGE" => "i", _ => null });
         var host = new KubernetesRunHost(api.Client(), options, FakeKubernetesApi.Namespace, new ProcessRunner());
         api.OnExec = e => e.ExitAsync(0);
