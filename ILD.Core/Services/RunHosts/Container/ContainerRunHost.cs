@@ -20,7 +20,7 @@ namespace ILD.Core.Services.RunHosts.Container;
 /// its own that reaches only ILD, and all three carry the run's labels. There are no owner references: ending the
 /// run deletes the container, the volume and the network, and the sweeper deletes what a killed ILD left.
 /// </summary>
-public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposable
+public sealed class ContainerRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine, IRunHostShutdown, IDisposable
 {
     public const string RunLeftoverKind = "container-run";
 
@@ -535,7 +535,6 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     private async Task<bool> RunContainerStoppedAsync(Guid owner, CancellationToken ct)
     {
         var container = await _api.GetAsync($"/containers/{Escaped(RunNames.Run(owner))}/json", ct, HttpStatusCode.NotFound);
-        if (container is not null) Remember(owner, TerminationOf(container));
         return container?["State"]?["Status"]?.GetValue<string>() is "exited" or "stopped" or "created";
     }
 
@@ -573,7 +572,9 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     private async Task<bool> UsesEngineDnsAsync(string container, CancellationToken ct)
         => (await _api.GetAsync($"/containers/{Escaped(container)}/json", ct))?["HostConfig"]?["Dns"] is not JsonArray { Count: > 0 };
 
-    protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    protected override IDirectRouteEngine DirectRouteEngine => this;
+
+    async Task IDirectRouteEngine.OpenAsync(ExecOwner owner, CancellationToken ct)
     {
         var container = ContainerOf(owner);
         var network = OpenNetworkName(owner);
@@ -591,7 +592,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
         await SetNameServerAsync(container, await GatewayNameServerAsync(network, ct), ct);
     }
 
-    protected override async Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    async Task IDirectRouteEngine.CloseAsync(ExecOwner owner, CancellationToken ct)
     {
         var container = ContainerOf(owner);
         var attached = new List<string>();
@@ -604,10 +605,10 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
             await _api.PostAsync($"/networks/{Escaped(network)}/disconnect", new { Container = container }, ct);
     }
 
-    protected override async Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    async Task<bool> IDirectRouteEngine.HasAsync(ExecOwner owner, CancellationToken ct)
         => await OnNetworkAsync(ContainerOf(owner), OpenNetworkName(owner), ct) || await OnNetworkAsync(ContainerOf(owner), SharedOpenNetworkName, ct);
 
-    public override async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default)
+    async Task<IReadOnlyList<DirectRoute>> IDirectRouteEngine.ListAsync(CancellationToken ct)
     {
         var routes = new HashSet<DirectRoute>();
         foreach (var name in await OpenNetworksAsync(ct))
@@ -668,7 +669,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     public async Task ShutdownAsync(CancellationToken ct)
     {
         var work = new List<Task> { RemoveContainerAsync(ChatName, "the chat container", ct) };
-        work.AddRange(OpenSideEnvironments.Select(name =>
+        work.Add(RemoveOpenSideEnvironmentsAsync(name =>
             RemoveContainerAsync(name, name.StartsWith(RunNames.InstallerPrefix, StringComparison.Ordinal) ? "a toolchain installer" : "a sign-in container", ct)));
         try
         {
@@ -713,11 +714,15 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
 
     protected override TimeSpan ChatIdleTimeout => _options.ChatIdleTimeout;
 
-    protected override Task RemoveChatAsync(CancellationToken ct) => RemoveContainerAsync(ChatName, "the chat container", ct);
+    protected override IChatEngine ChatEngine => this;
 
-    protected override string ChatEnvironmentName => ChatName;
+    Task IChatEngine.RemoveAsync(CancellationToken ct) => RemoveContainerAsync(ChatName, "the chat container", ct);
 
-    protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => ChatContainerRunningAsync(ct);
+    string IChatEngine.Name => ChatName;
+
+    Task<bool> IChatEngine.IsUpAsync(CancellationToken ct) => ChatContainerRunningAsync(ct);
+
+    Task<bool> IChatEngine.ExistsAsync(CancellationToken ct) => RunExistsAsync(new ExecOwner(Guid.Empty, Chat: true), ct);
 
     /// <summary>The chat container, its volume and its network: one of each for the instance, kept running.</summary>
     internal string ChatName => RunNames.Chat(_options.Instance);
@@ -728,7 +733,7 @@ public sealed class ContainerRunHost : ExecRunHost, IRunHostShutdown, IDisposabl
     private Dictionary<string, string> ChatLabels() => RunNames.Labels(_options.Instance, RunPaths.ChatRole);
 
     // The chat container is made and started; a stopped one is replaced, and what it held is in the volume.
-    protected override async Task MakeChatAsync(CancellationToken ct)
+    async Task IChatEngine.MakeAsync(CancellationToken ct)
     {
         await TolerateConflictAsync(() => _api.PostAsync("/volumes/create", new { Name = ChatName, Labels = ChatLabels() }, ct));
         if (_options.Toolchains)

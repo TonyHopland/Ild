@@ -12,7 +12,7 @@ public sealed class RunReadLimitsTests
 
     private static RunReadLimits Limits(long bytes) => new() { MaxFileBytes = bytes, MaxOutputBytes = bytes, MaxBundleBytes = bytes, MaxPreviewDataBytes = bytes };
 
-    private static Host NewHost(IExecStream exec, long limit) => new(exec) { ReadLimits = Limits(limit) };
+    private static Host NewHost(IExecStream exec, long limit, PreviewDataStore? store = null) => new(exec) { ReadLimits = Limits(limit), PreviewData = store };
 
     [Fact]
     public async Task Collected_output_stops_at_the_limit_and_the_command_is_not_read_further()
@@ -101,9 +101,9 @@ public sealed class RunReadLimitsTests
             Directory.CreateDirectory(stored);
             File.WriteAllText(Path.Combine(stored, "keep.txt"), "before");
             var exec = new EndlessExec();
-            var host = NewHost(exec, 100 * 1024);
+            var host = NewHost(exec, 100 * 1024, store);
 
-            await host.SyncAsync(repository, store, TestContext.Current.CancellationToken);
+            await host.SyncAsync(repository, TestContext.Current.CancellationToken);
 
             Assert.Equal("before", File.ReadAllText(Path.Combine(stored, "keep.txt")));
             Assert.Equal(["keep.txt"], Directory.GetFileSystemEntries(stored).Select(Path.GetFileName).ToArray());
@@ -239,9 +239,8 @@ public sealed class RunReadLimitsTests
 
         public Task<RunHostResult> PullAsync(Stream sink, CancellationToken ct) => PullBundleAsync(RunPaths.WorkingDirectory(Owner), "main", false, sink, ct);
 
-        public Task SyncAsync(Guid repository, PreviewDataStore store, CancellationToken ct)
+        public Task SyncAsync(Guid repository, CancellationToken ct)
         {
-            PreviewData = store;
             return DeleteAsync(new RunEnvironment(Owner, RunPaths.WorkingDirectory(Owner), repository), ct);
         }
 
@@ -261,15 +260,9 @@ public sealed class RunReadLimitsTests
         protected override Task RemoveToolInstallerAsync(string name) => throw new NotSupportedException();
         protected override Task StartSignInAsync(string name, Guid id, RunToolEnvironment? tools, CancellationToken ct) => throw new NotSupportedException();
         protected override Task RemoveSignInAsync(string name) => throw new NotSupportedException();
-        protected override string ChatEnvironmentName => throw new NotSupportedException();
-        protected override Task<bool> ChatIsUpAsync(CancellationToken ct) => throw new NotSupportedException();
-        protected override Task MakeChatAsync(CancellationToken ct) => throw new NotSupportedException();
-        protected override Task RemoveChatAsync(CancellationToken ct) => throw new NotSupportedException();
+        protected override IChatEngine ChatEngine => throw new NotSupportedException();
         protected override string ToolZoneName(RunToolMount zone) => throw new NotSupportedException();
-        protected override Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
-        protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
-        protected override Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct) => throw new NotSupportedException();
-        public override Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        protected override IDirectRouteEngine DirectRouteEngine => throw new NotSupportedException();
         protected override Task<bool> IsRunningAsync(Guid owner, CancellationToken ct) => Task.FromResult(true);
         protected override Task<string> RunAddressAsync(Guid run, CancellationToken ct) => throw new NotSupportedException();
         protected override Task<SweepFacts> FindLeftoverFactsAsync(CancellationToken ct) => throw new NotSupportedException();

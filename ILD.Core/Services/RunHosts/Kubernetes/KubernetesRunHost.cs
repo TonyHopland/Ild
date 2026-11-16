@@ -16,7 +16,7 @@ namespace ILD.Core.Services.RunHosts.Kubernetes;
 /// The run host that puts each loop run in a pod of its own, with a volume of its own. The run's ConfigMap owns the pod,
 /// the volume claim and the network policy. A run is taken down pod first: the policies go only once the pod is gone.
 /// </summary>
-public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
+public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEngine, IRunHostShutdown
 {
     public const string RunLeftoverKind = "kubernetes-run";
 
@@ -191,7 +191,6 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         var name = RunNames.Run(owner);
         var pod = await ReadPodOrNullAsync(name, ct);
         if (pod is null || pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return;
-        Remember(owner, TerminationOf(pod));
         await DeletePodAndWaitAsync(name, ct);
     }
 
@@ -249,7 +248,6 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             if (IsReady(pod) && pod.Metadata.DeletionTimestamp is null) return true;
             if (pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is not ("Failed" or "Succeeded")) return false;
 
-            Remember(owner, TerminationOf(pod));
             Logger?.LogInformation("The pod of run {Run} ended ({Why}); making it again on its volume", owner, WhyNotReady(pod));
             await DeletePodAndWaitAsync(name, ct);
             var fresh = new V1Pod
@@ -428,7 +426,9 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     private string PolicyOf(ExecOwner owner) => RunNames.OpenPolicy(owner.Chat ? ChatPodName : RunNames.Run(owner.Id));
 
-    protected override async Task OpenDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    protected override IDirectRouteEngine DirectRouteEngine => this;
+
+    async Task IDirectRouteEngine.OpenAsync(ExecOwner owner, CancellationToken ct)
     {
         if (owner.Chat)
         {
@@ -440,10 +440,10 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             _manifests.OpenPolicy(owner.Id, KubernetesManifests.OwnerReference(ownerObject)), _namespace, cancellationToken: ct));
     }
 
-    protected override Task CloseDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    Task IDirectRouteEngine.CloseAsync(ExecOwner owner, CancellationToken ct)
         => IgnoreNotFoundAsync(() => _client.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(PolicyOf(owner), _namespace, cancellationToken: ct));
 
-    protected override async Task<bool> HasDirectRouteAsync(ExecOwner owner, CancellationToken ct)
+    async Task<bool> IDirectRouteEngine.HasAsync(ExecOwner owner, CancellationToken ct)
     {
         try
         {
@@ -456,7 +456,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
         }
     }
 
-    public override async Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default)
+    async Task<IReadOnlyList<DirectRoute>> IDirectRouteEngine.ListAsync(CancellationToken ct)
     {
         var policies = await _client.NetworkingV1.ListNamespacedNetworkPolicyAsync(
             _namespace, labelSelector: RunNames.Selector(_options.Instance, RunPaths.OpenRole), cancellationToken: ct);
@@ -471,9 +471,13 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
 
     private string ChatPodName => RunNames.Chat(_options.Instance);
 
-    protected override string ChatEnvironmentName => ChatPodName;
+    protected override IChatEngine ChatEngine => this;
 
-    protected override async Task<bool> ChatIsUpAsync(CancellationToken ct)
+    string IChatEngine.Name => ChatPodName;
+
+    Task<bool> IChatEngine.ExistsAsync(CancellationToken ct) => RunExistsAsync(new ExecOwner(Guid.Empty, Chat: true), ct);
+
+    async Task<bool> IChatEngine.IsUpAsync(CancellationToken ct)
     {
         await ChatIldAddressAsync(ct);
         var pod = await ChatPodStateAsync(ct);
@@ -481,7 +485,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     }
 
     // The chat pod is made when it is missing, and replaced when it has ended, is going away or is stale. The claim keeps the chats' folders through that.
-    protected override async Task MakeChatAsync(CancellationToken ct)
+    async Task IChatEngine.MakeAsync(CancellationToken ct)
     {
         var existing = await ChatPodStateAsync(ct);
         if (existing is not null && (existing.Metadata.DeletionTimestamp is not null || existing.Status?.Phase is "Failed" or "Succeeded" || !IsCurrent(existing)))
@@ -557,7 +561,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
     /// </summary>
     public async Task ShutdownAsync(CancellationToken ct)
     {
-        await Task.WhenAll(new[] { ChatPodName }.Concat(OpenSideEnvironments).Select(async name =>
+        async Task RemoveAsync(string name)
         {
             try
             {
@@ -569,12 +573,14 @@ public sealed class KubernetesRunHost : ExecRunHost, IRunHostShutdown
             {
                 Logger?.LogWarning(ex, "Could not delete the pod {Name}; it is replaced or swept when ILD next starts", name);
             }
-        }));
+        }
+
+        await Task.WhenAll(RemoveAsync(ChatPodName), RemoveOpenSideEnvironmentsAsync(RemoveAsync));
     }
 
     protected override TimeSpan ChatIdleTimeout => _options.ChatIdleTimeout;
 
-    protected override Task RemoveChatAsync(CancellationToken ct)
+    Task IChatEngine.RemoveAsync(CancellationToken ct)
         => IgnoreNotFoundAsync(() => _client.CoreV1.DeleteNamespacedPodAsync(ChatPodName, _namespace, new V1DeleteOptions { GracePeriodSeconds = 0 }, cancellationToken: ct));
 
     private Task<V1Pod?> ChatPodStateAsync(CancellationToken ct) => ReadPodOrNullAsync(ChatPodName, ct);

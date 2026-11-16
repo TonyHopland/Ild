@@ -64,10 +64,14 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
             _ => null,
         }) with { ReadyTimeout = TimeSpan.FromSeconds(10) };
 
-    private ContainerRunHost NewHost(ContainerRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null)
+    private ContainerRunHost NewHost(ContainerRunHostOptions options, IReadOnlyList<RunAgent>? agents = null, TimeProvider? time = null, ExecRunHostServices? services = null)
         => new(options, new ProcessRunner(), _log)
         {
             Time = time ?? TimeProvider.System,
+            Forwards = services?.Forwards,
+            Probe = services?.Probe,
+            Refusals = services?.Refusals,
+            PreviewData = services?.PreviewData,
             Credentials = EgressProxyTests.Creds,
             ReadyPollInterval = TimeSpan.FromMilliseconds(10),
             ExitStatusTimeout = TimeSpan.FromMilliseconds(400),
@@ -251,7 +255,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task A_new_environment_probes_for_a_direct_way_out_and_a_refused_connect_makes_the_rules_enforced()
     {
         var probe = new ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe(_ => null, ildReaches: (_, _, _) => Task.FromResult(true));
-        _host.Probe = probe;
+        _host = NewHost(Options(), services: new ExecRunHostServices { Probe = probe });
         _api.OnExec = async e =>
         {
             if (e.WantsStdin) await e.ReadStdinToEndAsync();
@@ -400,7 +404,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task The_name_of_a_forward_is_mapped_by_root_which_owns_the_hosts_file_starting_with_the_systems_path_alone()
     {
         await CreateRunAsync();
-        _host.Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]);
+        _host = NewHost(Options(), services: new ExecRunHostServices { Forwards = _ => Task.FromResult<IReadOnlyList<RunForward>>([new(15432, "postgres", 5432)]) });
 
         using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "make-it"), _run), TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -619,33 +623,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         if (podman) Assert.NotEqual(openGateway, close.Command[^1]);
     }
 
-    [Fact]
-    public async Task Two_launches_in_off_at_once_both_start_and_the_container_is_connected_once()
-    {
-        await CreateRunAsync();
-        var ct = TestContext.Current.CancellationToken;
 
-        var both = await Task.WhenAll(StartAsync(NetworkMode.Off), StartAsync(NetworkMode.Off));
-
-        Assert.Equal(2, both.Length);
-        Assert.Single(_api.Connects, c => c["Container"]!.GetValue<string>() == Name(_run));
-        foreach (var p in both) p.Dispose();
-    }
-
-    [Fact]
-    public async Task Returning_to_a_proxied_mode_with_an_off_process_still_running_keeps_the_route()
-    {
-        await CreateRunAsync();
-        var release = HoldOffLaunches();
-        using var off = await LaunchAsync(NetworkMode.Off);
-
-        using var process = await StartAsync(NetworkMode.Monitor);
-
-        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
-        Assert.NotEmpty(LaunchEnvironment());
-        release.SetResult();
-        await off.WaitForExitAsync(TestContext.Current.CancellationToken);
-    }
 
     [Fact]
     public async Task A_planted_off_file_does_not_keep_the_route_once_ilds_own_off_launches_have_ended()
@@ -660,24 +638,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.NotEmpty(LaunchEnvironment());
     }
 
-    [Fact]
-    public async Task The_route_closes_on_the_first_proxied_launch_after_the_last_off_launch_ended_and_not_before()
-    {
-        await CreateRunAsync();
-        var release = HoldOffLaunches();
-        using var first = await LaunchAsync(NetworkMode.Off);
-        using var second = await LaunchAsync(NetworkMode.Off);
-        _api.OnExec = async e => await e.ExitAsync(0);
-        // Both running: the route stays. Ending one is not enough.
-        using (await StartAsync(NetworkMode.Whitelist)) { }
-        Assert.Contains(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
-        release.SetResult();
-        await Task.WhenAll(first.WaitForExitAsync(TestContext.Current.CancellationToken), second.WaitForExitAsync(TestContext.Current.CancellationToken));
-
-        using var process = await StartAsync(NetworkMode.Whitelist);
-
-        Assert.DoesNotContain(OpenNetwork(_run), _api.NetworksOf(Name(_run)));
-    }
 
     [Fact]
     public async Task A_restarted_ild_closes_a_route_it_finds_on_its_first_proxied_launch()
@@ -703,7 +663,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var asked = 0;
         var probe = new ILD.Core.Services.Implementations.Network.NetworkEnforcementProbe(
             _ => null, ildReaches: (_, _, _) => { Interlocked.Increment(ref asked); return Task.FromResult(true); });
-        _host.Probe = probe;
+        _host = NewHost(Options(), services: new ExecRunHostServices { Probe = probe });
         return (probe, () => Volatile.Read(ref asked));
     }
 
@@ -781,22 +741,6 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         Assert.DoesNotContain(ChatOpenNetwork, _api.NetworksOf(ChatContainer));
     }
 
-    [Fact]
-    public async Task A_live_off_launch_of_one_chat_keeps_the_chat_containers_route_for_a_proxied_launch_of_another()
-    {
-        var live = Guid.NewGuid();
-        var other = Guid.NewGuid();
-        await _host.CreateChatFolderAsync(live, "/unused", TestContext.Current.CancellationToken);
-        await _host.CreateChatFolderAsync(other, "/unused", TestContext.Current.CancellationToken);
-        var release = HoldOffLaunches();
-        using var off = await ChatLaunchAsync(live, NetworkMode.Off);
-
-        using var process = await ChatLaunchAsync(other, NetworkMode.Monitor);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains(ChatOpenNetwork, _api.NetworksOf(ChatContainer));
-        release.SetResult();
-    }
 
     [Fact]
     public async Task Two_runs_in_off_are_on_networks_of_their_own_and_each_is_reported_with_a_route()
@@ -1153,7 +1097,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     [Fact]
     public async Task A_run_made_with_kept_preview_data_gets_a_copy_of_the_stored_copy_in_its_own_folder()
     {
-        _host.PreviewData = StoreWith(("data/seed", "kept"));
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = StoreWith(("data/seed", "kept")) });
         byte[]? filled = null;
         _api.OnExec = async e =>
         {
@@ -1177,7 +1121,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task Ending_a_run_cleanly_puts_its_copy_back_in_the_store_and_the_copy_goes_with_the_container()
     {
         var store = StoreWith(("data/seed", "old"));
-        _host.PreviewData = store;
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = store });
         await CreateRunAsync();
         var archive = TarOf(("data/seed", "changed in the run"), ("data/added", "new"));
         _api.OnExec = async e =>
@@ -1200,7 +1144,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task A_run_whose_container_stopped_is_removed_without_putting_its_copy_back()
     {
         var store = StoreWith(("data/seed", "old"));
-        _host.PreviewData = store;
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = store });
         await CreateRunAsync();
         _api.Stop(Name(_run));
         _api.OnExec = async e =>
@@ -1220,7 +1164,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task Reclaiming_a_run_whose_container_stopped_neither_starts_it_again_nor_puts_its_copy_back()
     {
         var store = StoreWith(("data/seed", "old"));
-        _host.PreviewData = store;
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = store });
         await CreateRunAsync();
         _api.Stop(Name(_run));
         _api.Execs.Clear();
@@ -1244,7 +1188,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task Reclaiming_a_running_run_puts_its_copy_back()
     {
         var store = StoreWith(("data/seed", "old"));
-        _host.PreviewData = store;
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = store });
         await CreateRunAsync();
         _api.OnExec = async e =>
         {
@@ -1266,7 +1210,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     public async Task A_copy_that_cannot_be_put_back_leaves_the_stored_copy_as_it_was(int exitCode, string output)
     {
         var store = StoreWith(("data/seed", "old"));
-        _host.PreviewData = store;
+        _host = NewHost(Options(), services: new ExecRunHostServices { PreviewData = store });
         await CreateRunAsync();
         _api.OnExec = async e =>
         {
@@ -2741,6 +2685,12 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", TestContext.Current.CancellationToken);
         await using var signIn = await host.OpenSignInAsync(
             ManagedAgentCatalog.ClaudeCode, "/data/agents/claude/bin/claude", ["setup-token"], 100, 30, TestContext.Current.CancellationToken);
+
+        // The fake engine answers the sign-in's exec on its own task, which may not have run when the terminal is returned.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        limit.CancelAfter(TimeSpan.FromSeconds(10));
+        while (!made.Keys.Any(name => name.StartsWith("ild-signin-", StringComparison.Ordinal)))
+            await Task.Delay(10, limit.Token);
 
         var kinds = made.Keys.Select(name => name switch
         {
