@@ -1,10 +1,9 @@
 using ILD.Core.Services.Implementations.Adapters;
-using ILD.Core.Services.Interfaces;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// The <c>pi --mode json</c> stdout parser and result assembly, fed real event shapes directly
+/// The <c>pi --mode json</c> stdout parser, fed real event shapes directly
 /// rather than through a stand-in CLI process.
 /// </summary>
 public class PiOutputParsingTests
@@ -17,11 +16,8 @@ public class PiOutputParsingTests
     private static string MessageEnd(string text)
         => $"{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"text\":\"{text}\"}}]}}}}";
 
-    private static Task<PiAdapter.PiExecutionOutput> Read(Func<string, Task>? progress, Action<string>? onSessionId, params string[] lines)
+    private static Task<StreamResult> Read(Func<string, Task>? progress, Action<string>? onSessionId, params string[] lines)
         => PiAdapter.ReadStdoutAsync(AdapterStreamReaders.Of(lines), progress, onSessionId, TestContext.Current.CancellationToken);
-
-    private static NodeExecutionResult Assemble(PiAdapter.PiExecutionOutput stdout, int exitCode = 0, string stderr = "")
-        => PiAdapter.AssembleResult(stdout, stderr, exitCode, "the prompt", effectiveSessionId: stdout.SessionId, incomingSessionId: null);
 
     [Fact]
     public async Task Text_deltas_are_streamed_and_the_session_header_gives_the_session_id()
@@ -31,9 +27,9 @@ public class PiOutputParsingTests
             chunk => { progress.Add(chunk); return Task.CompletedTask; }, null,
             Session, Delta("hello "), Delta("world"), MessageEnd("hello world"));
 
-        Assert.Equal("hello world", output.Content);
+        Assert.Equal("hello world", output.Text);
         Assert.Equal("pi-live", output.SessionId);
-        Assert.True(output.SawTurnEnd);
+        Assert.Null(output.Truncation);
         Assert.Equal(["hello ", "world"], progress);
     }
 
@@ -42,7 +38,7 @@ public class PiOutputParsingTests
     {
         var output = await Read(null, null, Session, MessageEnd("whole message"));
 
-        Assert.Equal("whole message", output.Content);
+        Assert.Equal("whole message", output.Text);
     }
 
     [Fact]
@@ -65,7 +61,7 @@ public class PiOutputParsingTests
             Delta("ran the tests"), MessageEnd("ran the tests"));
 
         Assert.Contains("\n[tool: bash] npm test\n", progress);
-        Assert.Equal("ran the tests", output.Content);
+        Assert.Equal("ran the tests", output.Text);
     }
 
     [Fact]
@@ -83,54 +79,16 @@ public class PiOutputParsingTests
             "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}");
 
         Assert.Contains("\n[tool: mcp__ild__get_workitem] wi-7\n", progress);
-        Assert.Equal("done", output.Content);
+        Assert.Equal("done", output.Text);
     }
 
     [Fact]
-    public async Task A_stream_that_ends_before_message_end_fails_as_truncated_keeping_the_partial_text()
+    public async Task A_stream_that_ends_before_message_end_is_marked_truncated_keeping_the_partial_text()
     {
         var output = await Read(null, null, Session, Delta("partial response"));
 
-        var result = Assemble(output);
-
-        Assert.False(output.SawTurnEnd);
-        Assert.False(result.Success);
-        Assert.Contains("truncated", result.Error);
-        Assert.Equal("partial response", result.Output);
-    }
-
-    [Fact]
-    public async Task A_completed_turn_without_text_fails_with_a_diagnostic()
-    {
-        var output = await Read(null, null, Session,
-            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[]}}");
-
-        var result = Assemble(output, stderr: "provider dropped it");
-
-        Assert.False(result.Success);
-        Assert.Contains("[pi] no assistant text response. stderr: provider dropped it", result.Error);
-    }
-
-    [Fact]
-    public async Task Stdout_that_is_not_json_is_the_response()
-    {
-        var output = await Read(null, null, "plain output");
-
-        var result = Assemble(output);
-
-        Assert.True(result.Success, result.Error);
-        Assert.Equal("plain output", result.Output!.Trim());
-    }
-
-    [Fact]
-    public async Task A_nonzero_exit_fails_with_the_exit_code_and_stderr()
-    {
-        var output = await Read(null, null, Session, Delta("x"), MessageEnd("x"));
-
-        var result = Assemble(output, exitCode: 2, stderr: "boom");
-
-        Assert.False(result.Success);
-        Assert.Equal("exit=2 stderr=boom", result.Error);
+        Assert.Equal("partial response", output.Text);
+        Assert.Contains("truncated", output.Truncation);
     }
 
     [Fact]
@@ -145,26 +103,10 @@ public class PiOutputParsingTests
             $"{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}}}}",
             $"{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}},\"toolResults\":[]}}");
 
-        var result = Assemble(output);
+        var usage = AdapterUsageParser.ParsePi(output.RawStdout);
 
-        Assert.True(result.Success, result.Error);
-        Assert.Equal(325, result.Usage!.InputTokens);
-        Assert.Equal(40, result.Usage.OutputTokens);
-        Assert.Equal(0.75m, result.Usage.CostUsd);
-    }
-
-    [Fact]
-    public void A_non_zero_exit_with_empty_stderr_puts_the_stdout_tail_in_the_error()
-    {
-        var result = Assemble(new PiAdapter.PiExecutionOutput("the cli printed this and died", "", null, false, false), exitCode: 1);
-        Assert.False(result.Success);
-        Assert.Contains("the cli printed this and died", result.Error);
-    }
-
-    [Fact]
-    public void Narration_in_the_stdout_tail_of_a_genuine_failure_is_not_read_as_a_throttle()
-    {
-        var result = Assemble(new PiAdapter.PiExecutionOutput("the test got 503 Service Unavailable from staging", "", null, false, false), exitCode: 1);
-        Assert.NotEqual(FailureKind.Interrupted, ILD.Core.Services.Implementations.AiFailureClassifier.Classify(null, result.Error));
+        Assert.Equal(325, usage!.InputTokens);
+        Assert.Equal(40, usage.OutputTokens);
+        Assert.Equal(0.75m, usage.CostUsd);
     }
 }
