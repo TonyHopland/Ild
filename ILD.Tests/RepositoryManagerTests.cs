@@ -294,6 +294,56 @@ public sealed class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_continuing_an_existing_branch_gets_a_worktree_at_the_origin_tip_replacing_a_stale_local_branch()
+    {
+        // The Start node's steps for a run on an existing branch, against real git:
+        // fetch, reset the base clone to origin/<branch>, drop a stale local branch of
+        // that name, and cut the worktree from what is left at HEAD.
+        var work = Path.Combine(_tmp, "ec-work");
+        var bare = Path.Combine(_tmp, "ec-origin.git");
+        var target = Path.Combine(_tmp, "ec-base");
+        Directory.CreateDirectory(work);
+        Git(work, "init", "-b", "main");
+        Git(work, "config", "user.email", "t@t.io");
+        Git(work, "config", "user.name", "Tester");
+        File.WriteAllText(Path.Combine(work, "a.txt"), "a\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "seed");
+        Git(work, "checkout", "-b", "Planning");
+        File.WriteAllText(Path.Combine(work, "plan.txt"), "first\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "planning one");
+        Git(work, "checkout", "main");
+        Git(_tmp, "clone", "--bare", work, bare);
+
+        var mgr = NewManager(Path.Combine(_tmp, "ec-wt"));
+        var auth = new GitAuthOptions(bare, null);
+        var (cloned, cloneError) = await mgr.CloneAsync(bare, target, TestContext.Current.CancellationToken, auth);
+        Assert.True(cloned, cloneError);
+
+        // A local Planning left behind at an old commit, and the branch moving on at origin since.
+        Git(target, "branch", "Planning", "main");
+        Git(work, "checkout", "Planning");
+        File.WriteAllText(Path.Combine(work, "plan.txt"), "second\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "planning two");
+        Git(work, "push", bare, "Planning");
+        var originTip = GitOut(work, "rev-parse", "HEAD");
+
+        Assert.True(await mgr.FetchAsync(target, TestContext.Current.CancellationToken, auth));
+        Assert.True(await mgr.RemoteBranchExistsInBaseRepoAsync(target, "Planning"));
+        Assert.True(await mgr.ResetHardAsync(target, "origin/Planning", TestContext.Current.CancellationToken));
+        Assert.True(await mgr.LocalBranchExistsAsync(target, "Planning"));
+        Assert.True(await mgr.DeleteLocalBranchAsync(target, "Planning"));
+        var wt = await mgr.CreateWorktreeAsync(target, "Planning");
+
+        Assert.Equal(originTip, await mgr.GetHeadCommitAsync(wt));
+        Assert.Equal("second\n", File.ReadAllText(Path.Combine(wt, "plan.txt")));
+        Assert.Equal("Planning", GitOut(wt, "rev-parse", "--abbrev-ref", "HEAD"));
+        Assert.Equal(0, await mgr.GetCommitsAheadCountAsync(wt, "origin/Planning"));
+    }
+
+    [Fact]
     public async Task CloneAsync_authenticates_only_the_orchestrators_mirror_operations()
     {
         var origin = Path.Combine(_tmp, "clone-origin");
