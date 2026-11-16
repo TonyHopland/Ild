@@ -58,10 +58,10 @@ public static class AgentRunFiles
     /// their tokens, behind. Returns whether everything is gone.
     /// </summary>
     public static async Task<bool> SweepAtStartupAsync(
-        IRunHost host, IReadOnlySet<Guid> activeRunAndChatIds, ILogger logger, CancellationToken ct = default)
+        IRunLeftovers host, IReadOnlySet<Guid> activeRunAndChatIds, ILogger logger, CancellationToken ct = default)
         => await DeleteLeftoversAsync(host, await host.ListLeftoversAsync(activeRunAndChatIds, ct), listedAll: true, logger, ct);
 
-    /// <inheritdoc cref="SweepAtStartupAsync(IRunHost, IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
+    /// <inheritdoc cref="SweepAtStartupAsync(IRunLeftovers, IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
     internal static async Task<bool> SweepAtStartupAsync(
         IReadOnlySet<Guid> activeRunAndChatIds, string agentReadRoot, string scratchRoot, DateTime startedUtc, ILogger logger, CancellationToken ct)
     {
@@ -70,7 +70,7 @@ public static class AgentRunFiles
     }
 
     private static async Task<bool> DeleteLeftoversAsync(
-        IRunHost host, IReadOnlyList<RunLeftover> leftovers, bool listedAll, ILogger logger, CancellationToken ct)
+        IRunLeftovers host, IReadOnlyList<RunLeftover> leftovers, bool listedAll, ILogger logger, CancellationToken ct)
     {
         var clean = listedAll;
         foreach (var leftover in leftovers.Where(l => l.Kind != LocalRunHost.LegacyPiExtensionsKind))

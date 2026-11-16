@@ -12,4 +12,8 @@ public static class RunHostResolution
     /// </summary>
     public static IRunHost GetRunHost(this IServiceProvider services)
         => services.GetService<IRunHost>() ?? new LocalRunHost(services.GetService<IProcessRunner>(), services);
+
+    /// <summary>The operator view of the run host registered with <paramref name="services"/>, or that of the local one for a container that registers none.</summary>
+    public static IRunHostOperator GetRunHostOperator(this IServiceProvider services)
+        => services.GetService<IRunHostOperator>() ?? LocalRunHost.Shared;
 }

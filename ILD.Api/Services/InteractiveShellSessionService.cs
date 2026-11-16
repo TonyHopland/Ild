@@ -20,10 +20,10 @@ namespace ILD.Api.Services;
 public sealed class InteractiveShellSessionService
 {
     private readonly ILogger<InteractiveShellSessionService> _logger;
-    private readonly IRunHost _host;
+    private readonly IRunShells _host;
     private readonly IEgressPolicy? _egressPolicy;
 
-    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunHost host, IEgressPolicy? egressPolicy = null)
+    public InteractiveShellSessionService(ILogger<InteractiveShellSessionService> logger, IRunShells host, IEgressPolicy? egressPolicy = null)
     {
         _logger = logger;
         _host = host;

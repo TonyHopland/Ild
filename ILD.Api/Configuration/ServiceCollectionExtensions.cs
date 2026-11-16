@@ -74,14 +74,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         // Not a setting: containers (or pods in a cluster) from ILD's image, its own processes under dotnet run.
-        services.AddSingleton<IRunHost>(sp =>
+        services.AddSingleton<RunHostSelection>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
             var kind = RunHostOptions.Detect(name => config[name]);
             var runner = sp.GetRequiredService<IProcessRunner>();
             var credentials = sp.GetRequiredService<EgressCredentials>();
             var local = new LocalRunHost(runner, sp, credentials: credentials);
-            if (kind == RunHostKind.Local) return local;
+            if (kind == RunHostKind.Local) return RunHostSelection.For(local);
 
             var loggers = sp.GetRequiredService<ILoggerFactory>();
             var services = new ExecRunHostServices
@@ -101,16 +101,32 @@ public static class ServiceCollectionExtensions
                     return rows.Select(r => new RunForward(r.LocalPort, r.Host, r.Port)).ToList();
                 },
             };
-            return kind == RunHostKind.Kubernetes
+            return RunHostSelection.For(kind == RunHostKind.Kubernetes
                 ? KubernetesRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials, services)
-                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials, services);
+                : ContainerRunHostFactory.Create(local, name => config[name], runner, loggers, RetainedRuns(sp), credentials, services));
+        });
+        // One host, one registration; each caller is given the role it uses (ADR-0032).
+        services.AddSingleton<IRunHost>(sp => sp.GetRequiredService<RunHostSelection>().Host);
+        services.AddSingleton<IRunWorkspace>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunChats>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunRepositories>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunShells>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunFiles>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunLeftovers>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IPreviewHost>(sp => sp.GetRequiredService<IRunHost>());
+        services.AddSingleton<IRunHostOperator>(sp => sp.GetRequiredService<RunHostSelection>().Operator);
+        services.AddSingleton<InteractiveProviderSessionService>(sp =>
+        {
+            var selection = sp.GetRequiredService<RunHostSelection>();
+            return new InteractiveProviderSessionService(
+                sp.GetRequiredService<ILogger<InteractiveProviderSessionService>>(), sp.GetService<IEgressPolicy>(), sp.GetService<IManagedAgentUsage>(), sp.GetService<IServiceScopeFactory>(),
+                selection.Host, selection.SignIn, selection.LocalTerminalCommands);
         });
         // Before GracefulRunDrainService, so it stops after the drain has parked the runs.
         services.AddHostedService<RunHostShutdownService>();
         services.AddHostedService(sp => new RunHostSweeper(
-            sp.GetRequiredService<IRunHost>(),
+            sp.GetRequiredService<RunHostSelection>().Sweep,
             RetainedRuns(sp),
-            sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.SweepInterval : TimeSpan.FromMinutes(10),
             sp.GetService<ILogger<RunHostSweeper>>()));
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
@@ -246,8 +262,8 @@ public static class ServiceCollectionExtensions
             var config = sp.GetRequiredService<IConfiguration>();
             string? Read(string name) => Environment.GetEnvironmentVariable(name) ?? config[name];
             return new ProtectedDestinationSource(sp.GetRequiredService<IServiceScopeFactory>(), Read, RunHostOptions.Detect(Read), sp.GetRequiredService<TimeProvider>(),
-                isolatedRanges: ct => sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.IsolatedRangesAsync(ct) : Task.FromResult<IReadOnlyList<IpRange>>([]),
-                controlPlane: ct => sp.GetRequiredService<IRunHost>() is IIsolatedHostInfo info ? info.ControlPlaneAddressesAsync(ct) : Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]),
+                isolatedRanges: ct => sp.GetRequiredService<IRunHostOperator>().IsolatedRangesAsync(ct),
+                controlPlane: ct => sp.GetRequiredService<IRunHostOperator>().ControlPlaneAddressesAsync(ct),
                 logger: sp.GetRequiredService<ILogger<ProtectedDestinationSource>>(),
                 hostAddresses: ProtectedDestinationSource.HostMachineAddresses);
         });
@@ -302,7 +318,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConfigureOptions<WorkItemSchedulerOptions>, WorkItemSchedulerOptionsConfigurator>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();
-        services.AddSingleton<InteractiveProviderSessionService>();
         services.AddSingleton<InteractiveShellSessionService>();
         services.AddScoped<ISchedulerSettingsService, SchedulerSettingsService>();
         services.AddSingleton<WorkItemScheduler>();

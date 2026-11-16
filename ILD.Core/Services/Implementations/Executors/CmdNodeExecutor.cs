@@ -59,7 +59,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
     private sealed record ProcessResult(bool Ok, string Output, string? Error, RunTermination? Termination = null);
 
     private async Task<ProcessResult> RunProcessAsync(
-        IRunHost host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
+        IRunWorkspace host, string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();

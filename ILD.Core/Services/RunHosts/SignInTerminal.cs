@@ -1,17 +1,6 @@
-using ILD.Core.Services.Implementations.Adapters;
 using Porta.Pty;
 
 namespace ILD.Core.Services.RunHosts;
-
-/// <summary>A run host that can run a provider's sign-in terminal in a short-lived container of its own.</summary>
-public interface ISignInTerminalHost
-{
-    /// <summary>
-    /// Starts <paramref name="command"/> in a terminal in a container that no chat or run shares, with <paramref name="agent"/>
-    /// (installed first if the toolchain store lacks it) on its PATH. The container is removed when the result is disposed.
-    /// </summary>
-    Task<SignInTerminal> OpenSignInAsync(ManagedAgent? agent, string command, IReadOnlyList<string> arguments, int cols, int rows, CancellationToken ct);
-}
 
 /// <summary>A sign-in terminal and the container it runs in; disposing it ends the terminal and removes the container.</summary>
 public sealed class SignInTerminal(

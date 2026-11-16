@@ -172,7 +172,8 @@ public sealed class NetworkModeLaunchSeamTests : IDisposable
     private async Task<string> RunTerminalAsync(IEgressPolicy? policy)
     {
         var (server, client) = WebSocketPair.Create();
-        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy, host: new LocalRunHost(credentials: EgressProxyTests.Creds));
+        var seamHost = new LocalRunHost(credentials: EgressProxyTests.Creds);
+        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance, policy, host: seamHost, terminalCommands: seamHost);
         var provider = new AiProvider
         {
             Id = Guid.NewGuid(),

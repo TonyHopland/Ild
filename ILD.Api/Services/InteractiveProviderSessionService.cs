@@ -24,16 +24,22 @@ public sealed class InteractiveProviderSessionService
     private readonly IEgressPolicy? _egressPolicy;
     private readonly IManagedAgentUsage? _usage;
     private readonly IServiceScopeFactory? _scopes;
-    private readonly IRunHost _host;
+    private readonly IRunShells _host;
+    private readonly ISignInTerminalHost? _signIn;
+    private readonly ILocalTerminalCommands _terminalCommands;
 
     public InteractiveProviderSessionService(
         ILogger<InteractiveProviderSessionService> logger,
         IEgressPolicy? egressPolicy = null,
         IManagedAgentUsage? usage = null,
         IServiceScopeFactory? scopes = null,
-        IRunHost? host = null)
+        IRunShells? host = null,
+        ISignInTerminalHost? signIn = null,
+        ILocalTerminalCommands? terminalCommands = null)
     {
         _host = host ?? LocalRunHost.Shared;
+        _signIn = signIn;
+        _terminalCommands = terminalCommands ?? LocalRunHost.Shared;
         _logger = logger;
         _egressPolicy = egressPolicy;
         _usage = usage;
@@ -65,9 +71,9 @@ public sealed class InteractiveProviderSessionService
         }
 
         // With the container run host the CLI runs in a short-lived container of its own, with the agent from the toolchain store.
-        if (_host is ISignInTerminalHost signIn)
+        if (_signIn is not null)
         {
-            await RunInContainerAsync(socket, provider, binaryPath, signIn, initialCols, initialRows, cancellationToken);
+            await RunInContainerAsync(socket, provider, binaryPath, _signIn, initialCols, initialRows, cancellationToken);
             return;
         }
 
@@ -102,7 +108,7 @@ public sealed class InteractiveProviderSessionService
                 extraArgs = ["setup-token"];
             if (notice is not null)
                 await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
-            var routed = _host.RouteTerminalCommand(
+            var routed = _terminalCommands.RouteTerminalCommand(
                 binaryPath, extraArgs, provider.Id, await _egressPolicy.LaunchModeAsync(cancellationToken));
             var environment = new Dictionary<string, string>(routed.Environment) { ["HOME"] = throwawayHome };
 

@@ -195,9 +195,6 @@ internal sealed class FakeRunHost : IRunHost
     public Task<IPtyConnection> OpenTerminalAsync(PtyOptions options, ILD.Data.Enums.NetworkMode mode, CancellationToken ct = default)
         => throw new NotSupportedException("the fake run host has no terminal");
 
-    public AgentIsolation.AgentCommand RouteTerminalCommand(string fileName, IReadOnlyList<string> arguments, Guid? providerId, ILD.Data.Enums.NetworkMode mode)
-        => new(fileName, arguments, new Dictionary<string, string>());
-
     public Task<RunHostResult> PushBundleAsync(string targetPath, string originUrl, Stream bundle, CancellationToken ct = default)
     {
         lock (_gate) _directories.Add(targetPath);
@@ -210,14 +207,12 @@ internal sealed class FakeRunHost : IRunHost
     public Task<RunHostResult> PullBundleAsync(string clonePath, string branch, bool incremental, Stream sink, CancellationToken ct = default)
         => Task.FromResult(new RunHostResult(0, string.Empty));
 
-    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
+    public Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default) => Task.FromResult(ReadText(path));
+
+    public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult<Stream?>(_files.TryGetValue(path, out var bytes) ? new MemoryStream(bytes, writable: false) : null);
     }
-
-    public Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default) => Task.FromResult(ReadText(path));
-
-    public Task<Stream?> OpenFileForReadAsync(string path, CancellationToken ct = default) => OpenReadAsync(path, ct);
 
     public Task<Stream> OpenFileForWriteAsync(string path, CancellationToken ct = default)
     {

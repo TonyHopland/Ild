@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts.Isolated;
 using ILD.Core.Services.Implementations.Files;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -18,7 +19,7 @@ namespace ILD.Core.Services.RunHosts.Local;
 /// <c>dotnet run</c>: the agent's processes are children of ILD, and its files sit in the worktree and
 /// the scratch and agent-read roots of <see cref="AgentIsolation"/>.
 /// </summary>
-public sealed class LocalRunHost : IRunHost
+public sealed class LocalRunHost : IRunHost, IRunHostOperator, ILocalTerminalCommands
 {
     /// <summary>The host of a caller built without DI — unit tests, tools — that has no repository manager to make worktrees with.</summary>
     public static LocalRunHost Shared { get; } = new();
@@ -60,6 +61,22 @@ public sealed class LocalRunHost : IRunHost
         _made.TryAdd(request.OwnerId, 0);
         return new RunEnvironment(request.OwnerId, path);
     }
+
+    // -- What an operator sees: nothing of ILD's own machine has a container, a network of its own or anything to put away ---------
+
+    public Task<ContainerStats?> GetStatsAsync(Guid owner, CancellationToken ct = default) => Task.FromResult<ContainerStats?>(null);
+
+    public string? AttachTargetFor(string? path) => null;
+
+    public Task<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>> IsolatedRangesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ILD.Core.Services.Implementations.Network.IpRange>>([]);
+
+    public Task<IReadOnlyList<System.Net.IPAddress>> ControlPlaneAddressesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<System.Net.IPAddress>>([]);
+
+    public Task<string?> WarningAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
+
+    public Task<IReadOnlyList<DirectRoute>> DirectRoutesAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DirectRoute>>([]);
+
+    public Task ShutdownAsync(CancellationToken ct) => Task.CompletedTask;
 
     public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default)
         => Task.FromResult(_made.ContainsKey(environment.OwnerId));
@@ -292,9 +309,6 @@ public sealed class LocalRunHost : IRunHost
     }
 
     // -- Files -------------------------------------------------------------------
-
-    public Task<Stream?> OpenReadAsync(string path, CancellationToken ct = default)
-        => Task.FromResult<Stream?>(File.Exists(path) ? File.OpenRead(path) : null);
 
     public async Task<string?> ReadTextFileAsync(string path, CancellationToken ct = default)
         => File.Exists(path) ? await File.ReadAllTextAsync(path, ct) : null;

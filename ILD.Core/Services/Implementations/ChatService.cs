@@ -55,7 +55,7 @@ public sealed class ChatService : IChatService
     private readonly ClaudeProjectFolders _claudeProjects;
     private readonly IEgressPolicy? _egressPolicy;
 
-    private readonly IRunHost _runHost;
+    private readonly IRunChats _runHost;
     private readonly IAgentTokenService? _agentTokens;
     private readonly ChatPreparations _preparations;
 
@@ -68,7 +68,7 @@ public sealed class ChatService : IChatService
         ILoopRunStore runs,
         IChatLoopScratchpad loopScratchpad,
         ChatCloneCoordinator chatClones,
-        IRunHost runHost,
+        IRunChats runHost,
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,

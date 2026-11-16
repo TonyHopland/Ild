@@ -127,7 +127,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunHost host,
+        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager, IRunWorkspace host,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
@@ -165,7 +165,7 @@ public sealed class StartNodeExecutor : INodeExecutor
     /// after the mark is cleared.
     /// </summary>
     private static async Task<RunEnvironment> CreateEnvironmentAsync(
-        NodeExecutionContext ctx, IServiceProvider sp, IRunHost host, string workItemId, RunEnvironmentRequest request)
+        NodeExecutionContext ctx, IServiceProvider sp, IRunWorkspace host, string workItemId, RunEnvironmentRequest request)
     {
         var preparations = host.Kind == RunHostKind.Local ? null : sp.GetService<RunPreparations>();
         if (preparations is null) return await host.CreateAsync(request, ctx.CancellationToken);

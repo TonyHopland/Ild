@@ -45,7 +45,7 @@ public static class PtyWebSocketBridge
         TimeProvider? timeProvider = null,
         Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null,
         Action<ReadOnlySpan<byte>>? onOutput = null,
-        IRunHost? host = null,
+        IRunTerminals? host = null,
         ILD.Data.Enums.NetworkMode networkMode = ILD.Data.Enums.NetworkMode.Monitor)
     {
         var clock = timeProvider ?? TimeProvider.System;

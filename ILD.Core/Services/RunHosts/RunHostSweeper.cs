@@ -1,4 +1,3 @@
-using ILD.Core.Services.RunHosts.Isolated;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -11,20 +10,21 @@ namespace ILD.Core.Services.RunHosts;
 /// Beside the sweep, it keeps the agents ILD has installed in the toolchain store, so a run or chat does not wait for them.
 /// </summary>
 public sealed class RunHostSweeper(
-    IRunHost host, Func<CancellationToken, Task<IReadOnlySet<Guid>>> liveIds, TimeSpan interval, ILogger<RunHostSweeper>? logger = null)
+    IRunSweep? sweep, Func<CancellationToken, Task<IReadOnlySet<Guid>>> liveIds, ILogger<RunHostSweeper>? logger = null)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (host is not RoutingRunHost routing) return;
+        // Only a host with environments of its own has anything to sweep.
+        if (sweep is null) return;
 
-        await routing.Isolated.CheckAsync(stoppingToken);
-        await Task.WhenAll(SweepLoopAsync(routing.Isolated, stoppingToken), WarmLoopAsync(routing.Isolated, stoppingToken));
+        await sweep.CheckAsync(stoppingToken);
+        await Task.WhenAll(SweepLoopAsync(sweep, stoppingToken), WarmLoopAsync(sweep, stoppingToken));
     }
 
-    private async Task SweepLoopAsync(ExecRunHost isolated, CancellationToken stoppingToken)
+    private async Task SweepLoopAsync(IRunSweep isolated, CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(interval);
+        using var timer = new PeriodicTimer(isolated.SweepInterval);
         while (await WaitForNextAsync(timer, stoppingToken))
         {
             try
@@ -39,7 +39,7 @@ public sealed class RunHostSweeper(
     }
 
     // Often, and from the start: an agent ILD installs or updates is in the store within a minute, not at the next run.
-    private static async Task WarmLoopAsync(ExecRunHost isolated, CancellationToken stoppingToken)
+    private static async Task WarmLoopAsync(IRunSweep isolated, CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(WarmInterval);
         do
@@ -51,7 +51,7 @@ public sealed class RunHostSweeper(
 
     private static readonly TimeSpan WarmInterval = TimeSpan.FromMinutes(1);
 
-    internal async Task SweepAsync(ExecRunHost isolated, CancellationToken ct)
+    internal async Task SweepAsync(IRunSweep isolated, CancellationToken ct)
     {
         var leftovers = await isolated.ListLeftoversAsync(await liveIds(ct), ct);
         foreach (var leftover in leftovers)

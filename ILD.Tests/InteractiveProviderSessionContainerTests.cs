@@ -76,11 +76,11 @@ public sealed class InteractiveProviderSessionContainerTests : IAsyncLifetime
         File.WriteAllText(pointer, "v1");
     }
 
-    private InteractiveProviderSessionService Service(IProviderStore? store = null, IRunHost? host = null)
+    private InteractiveProviderSessionService Service(IProviderStore? store = null, RoutingRunHost? host = null)
     {
         var scopes = new ServiceCollection().AddSingleton(store ?? Mock.Of<IProviderStore>()).BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         return new InteractiveProviderSessionService(
-            NullLogger<InteractiveProviderSessionService>.Instance, scopes: scopes, host: host ?? new RoutingRunHost(new FakeRunHost(), _container))
+            NullLogger<InteractiveProviderSessionService>.Instance, scopes: scopes, host: host ??= new RoutingRunHost(new FakeRunHost(), _container), signIn: host)
         { StoreHome = _home, DataRoot = DataRoot };
     }
 

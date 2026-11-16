@@ -34,7 +34,7 @@ public class RepositoryManager : IRepositoryManager
     private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
     private readonly IProcessRunner _runner;
-    private readonly IRunHost _host;
+    private readonly IRunRepositories _host;
     private readonly string _worktreesRoot;
     private readonly GitMirror _mirrors;
     private readonly Func<string, string?> _readEnvironment;
@@ -43,7 +43,7 @@ public class RepositoryManager : IRepositoryManager
     /// <param name="mirrorsRoot">Where the per-remote mirrors live.</param>
     public RepositoryManager(
         IProcessRunner runner,
-        IRunHost host,
+        IRunRepositories host,
         ILogger<RepositoryManager>? logger = null,
         string? worktreesRoot = null,
         string? mirrorsRoot = null,
@@ -66,7 +66,7 @@ public class RepositoryManager : IRepositoryManager
     }
 
     // Test/back-compat constructor: spins up a local ProcessRunner.
-    public RepositoryManager(IRunHost host, ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
+    public RepositoryManager(IRunRepositories host, ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
         : this(new ProcessRunner(), host, logger, worktreesRoot)
     {
     }
@@ -551,7 +551,7 @@ public class RepositoryManager : IRepositoryManager
         var root = Path.GetFullPath(worktreePath);
         if (!full.StartsWith(root, StringComparison.Ordinal))
             return null;
-        await using var stream = await _host.OpenReadAsync(full);
+        await using var stream = await _host.OpenFileForReadAsync(full);
         if (stream is null) return null;
         using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         return await reader.ReadToEndAsync();
@@ -1109,7 +1109,7 @@ public class RepositoryManager : IRepositoryManager
 
     // ILD's own base clone is cloned, fetched and reset on this machine whatever the run host is. Which paths those are is
     // told by the repository rows, never by what a directory holds: a run's or chat's path, and any other path on this disk, stays with the routing host, which refuses it.
-    private async ValueTask<IRunHost> HostOfAsync(string path, CancellationToken ct)
+    private async ValueTask<IRunRepositories> HostOfAsync(string path, CancellationToken ct)
         => _host.OwnDiskHostFor(path) is { } ownDisk && await _isBaseRepository(Path.GetFullPath(path), ct)
             ? ownDisk
             : _host;

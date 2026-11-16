@@ -996,7 +996,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         SeedRun(orphan, Instance, container: false);
         SeedRun(otherInstance, "other");
         SeedRun(notOurs, Instance, managedBy: "someone-else");
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { live }));
 
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
@@ -1024,7 +1024,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
 
         // The process died with the run mid-way: a new one knows of no run, and finds the objects by their labels.
         using var restarted = NewHost(Options(ildContainer: "ild-main"));
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), restarted), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), restarted), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
         await sweeper.SweepAsync(restarted, TestContext.Current.CancellationToken);
 
         Assert.Equal(["ild-main"], _api.Containers());
@@ -2075,7 +2075,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         _api.SeedSignIn("ild-tools-left", Instance, role: "tools");
         _api.SeedSignIn("ild-tools-other", "other", role: "tools");
         using var host = NewHost(Options());
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         await sweeper.SweepAsync(host, TestContext.Current.CancellationToken);
 
@@ -2361,7 +2361,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var stale = Guid.NewGuid();
         SeedRun(stale, Instance);
         var leftovers = await _host.ListLeftoversAsync(new HashSet<Guid>(), TestContext.Current.CancellationToken);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), _host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
         await sweeper.SweepAsync(_host, TestContext.Current.CancellationToken);
 
         Assert.Equal(stale.ToString("N"), Assert.Single(leftovers).Location);
@@ -2606,7 +2606,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
         var (host, clock) = IdleHost();
         await host.CreateChatFolderAsync(Guid.NewGuid(), "/unused", ct);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         clock.Advance(IdleTimeout);
         await sweeper.SweepAsync(host, ct);
@@ -2796,7 +2796,7 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
         AnswerInstaller(ClaudeLine);
         await using var open = await host.OpenSignInAsync(ManagedAgentCatalog.ClaudeCode, "claude", [], 80, 24, TestContext.Current.CancellationToken);
         var openName = SignInContainerOf(_api);
-        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()), TimeSpan.FromMinutes(1));
+        var sweeper = new RunHostSweeper(new RoutingRunHost(new FakeRunHost(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>()));
 
         await sweeper.SweepAsync(host, TestContext.Current.CancellationToken);
 

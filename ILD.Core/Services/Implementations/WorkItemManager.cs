@@ -22,7 +22,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly IRunHost _runHost;
+    private readonly IRunWorkspace _runHost;
     private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
@@ -50,7 +50,7 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         BootstrapCredentials instance,
-        IRunHost runHost,
+        IRunWorkspace runHost,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,

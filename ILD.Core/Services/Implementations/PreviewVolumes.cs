@@ -10,7 +10,7 @@ namespace ILD.Core.Services.Implementations;
 /// A preview profile's named volumes: which names it may declare, what
 /// <c>${VOLUME:name}</c> expands to, and where each volume's folder is. Repositories
 /// with Keep preview data between runs on keep theirs in one folder per repository
-/// where the run host keeps it (<see cref="IRunHost.PreviewDataFolderAsync"/>), a volume per
+/// where the run host keeps it (<see cref="IRunWorkspace.PreviewDataFolderAsync"/>), a volume per
 /// subfolder; otherwise a volume lives under the worktree's state directory. Both are
 /// agent-writable, so ILD only creates and deletes there through the run host.
 /// </summary>
@@ -63,7 +63,7 @@ public static class PreviewVolumes
     /// where the preview's steps run.
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, string>> CreateFoldersAsync(
-        IRunHost host, string worktreePath, IReadOnlyList<string>? declared, PreviewVolumeScope? scope, string stateDirectory,
+        IRunWorkspace host, string worktreePath, IReadOnlyList<string>? declared, PreviewVolumeScope? scope, string stateDirectory,
         ILogger logger, CancellationToken cancellationToken)
     {
         var volumes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

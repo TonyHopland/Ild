@@ -7,13 +7,13 @@ namespace ILD.Core.Services.Implementations;
 
 public sealed class PromptTemplateResolver : IPromptTemplateResolver
 {
-    private readonly IRunHost _host;
+    private readonly IRunFiles _host;
 
     private static readonly TimeSpan FileReadLimit = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<PromptTemplateResolver>? _logger;
 
-    public PromptTemplateResolver(IRunHost host, ILogger<PromptTemplateResolver>? logger = null)
+    public PromptTemplateResolver(IRunFiles host, ILogger<PromptTemplateResolver>? logger = null)
     {
         _host = host;
         _logger = logger;
