@@ -19,5 +19,5 @@ The Claude Code CLI draws the line elsewhere: in headless mode (`claude -p`) it 
 
 ## Consequences
 
-- `/api/v1` loses the endpoints that restarted and resumed a waiting node, `childWait` on the run payloads, and the two settings that bounded the wait. Their only callers were the bundled frontend and MCP server.
+- `/api/v1` loses the endpoints that restarted and resumed a waiting node, the run payload field that described the wait, and the two settings that bounded it. Their only callers were the bundled frontend and MCP server.
 - The Claude stream reader has to treat several `result` events as one launch.
