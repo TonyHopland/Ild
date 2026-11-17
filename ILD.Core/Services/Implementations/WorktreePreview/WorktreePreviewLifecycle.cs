@@ -43,6 +43,9 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
     /// <summary>Whether a start is still bringing the preview up.</summary>
     public bool IsStarting => Volatile.Read(ref _start) is { InProgress: true };
 
+    /// <summary>Whether the start in progress is a whole-preview one; lets a test order a stop after a wider start took the record over.</summary>
+    public bool IsStartingWhole => Volatile.Read(ref _start) is { InProgress: true } start && start.Scope.IsWhole;
+
     /// <summary>How many starts wait on the start in progress; lets a test order a stop after a join.</summary>
     public int JoinedStartCount => Volatile.Read(ref _start)?.Joined ?? 0;
 

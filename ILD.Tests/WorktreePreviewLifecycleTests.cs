@@ -104,7 +104,9 @@ public sealed class WorktreePreviewLifecycleTests : IDisposable
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
-        while (Lifecycle(worktree).OvertakenStartCount == 0)
+        // The overtaken start is listed before the wider one is swapped in, so both must be seen: a stop in
+        // between would find only the overtaken start and leave the wider one running.
+        while (Lifecycle(worktree) is not { OvertakenStartCount: > 0, IsStartingWhole: true })
             await Task.Delay(10, timeout.Token);
     }
 
