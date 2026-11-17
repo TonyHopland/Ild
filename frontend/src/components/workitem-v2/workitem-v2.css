@@ -2295,3 +2295,13 @@
 .wiv2-stat-fill-high {
   background: #f87171;
 }
+
+.wiv2-background-tasks {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.wiv2-background-tasks ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}

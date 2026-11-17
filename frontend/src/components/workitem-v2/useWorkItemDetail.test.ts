@@ -132,6 +132,49 @@ describe("useWorkItemDetail live handoff", () => {
     expect(result.current.progressText).toBe("BACKLOG\nLIVE\n");
   });
 
+  test("shows the background work the CLI waits for: replayed on a reload, replaced on every change, cleared when it ends", async () => {
+    stubServices();
+    const server = { kind: "local_bash", description: "Run the dev server" };
+    const { emit } = mockSignalR({ text: "", lastSeq: 0, backgroundTasks: [server] });
+
+    const wi = makeWorkItem();
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.backgroundTasks).toEqual([server]);
+
+    const agent = { kind: "local_agent", description: "Review", subagentType: "general-purpose" };
+    act(() => emit("BackgroundTasksChanged", { runId: "run-1", nodeId: "n", tasks: [agent] }));
+    expect(result.current.backgroundTasks).toEqual([agent]);
+
+    act(() => emit("BackgroundTasksChanged", { runId: "other-run", nodeId: "n", tasks: [server] }));
+    expect(result.current.backgroundTasks).toEqual([agent]);
+
+    act(() => emit("BackgroundTasksChanged", { runId: "run-1", nodeId: "n", tasks: [] }));
+    expect(result.current.backgroundTasks).toEqual([]);
+  });
+
+  test("shows nothing when the replay carries no background work", async () => {
+    stubServices();
+    mockSignalR({ text: "", lastSeq: 0 });
+
+    const wi = makeWorkItem();
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+      wrapper: WorkItemHubProvider,
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.backgroundTasks).toEqual([]);
+  });
+
   test("ignores progress for a different run", async () => {
     stubServices();
     const { emit } = mockSignalR({ text: "", lastSeq: 0 });
@@ -234,7 +277,8 @@ describe("useWorkItemDetail preview live update", () => {
     vi.spyOn(workItemService, "startPreview").mockRejectedValue(new Error("refused"));
 
     const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
-    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -290,7 +334,9 @@ describe("useWorkItemDetail run cleanup", () => {
     );
     const getById = vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
 
-    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), vi.fn()), {
+    const wi = makeWorkItem();
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -316,7 +362,8 @@ describe("the queued pull-request writes a round intends to send", () => {
       .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
 
     const wi = makeWorkItem({ status: WorkItemStatus.Running, humanFeedbackReason: null });
-    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -373,7 +420,8 @@ describe("the queued pull-request writes a round intends to send", () => {
     vi.spyOn(loopRunService, "getById").mockRejectedValue(new Error("network"));
 
     const wi = makeWorkItem();
-    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {

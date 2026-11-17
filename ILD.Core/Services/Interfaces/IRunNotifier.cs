@@ -16,6 +16,9 @@ public interface IRunNotifier
     Task HaltedAsync(Guid runId);
     Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq);
 
+    /// <summary>The background work the node's agent CLI is waiting for changed; <paramref name="tasks"/> is the whole set now.</summary>
+    Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks) => Task.CompletedTask;
+
     /// <summary>The run's persisted PR snapshot was refreshed by the heartbeat poller.</summary>
     Task PrSnapshotChangedAsync(Guid runId);
 

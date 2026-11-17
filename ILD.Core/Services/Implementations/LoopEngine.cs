@@ -1095,6 +1095,11 @@ public sealed partial class LoopEngine : ILoopEngine
                 }
                 var seq = _progressBuffer.Append(run.Id, line);
                 await _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
+            },
+            async tasks =>
+            {
+                _progressBuffer.SetBackgroundTasks(run.Id, tasks);
+                await _notifier.BackgroundTasksChangedAsync(run.Id, node.Id, tasks);
             });
 
         IAsyncEnumerator<NodeOutcome>? enumerator = null;
@@ -1418,6 +1423,8 @@ public sealed partial class LoopEngine : ILoopEngine
         finally
         {
             if (enumerator is not null) await enumerator.DisposeAsync();
+            // The launch is over, however it ended (a timeout kills the CLI before it can say its tasks are gone).
+            await ClearBackgroundTasksAsync(run.Id, node.Id);
         }
         return ParkResult.Stop;
     }
@@ -1713,6 +1720,13 @@ public sealed partial class LoopEngine : ILoopEngine
         await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Done,
             reason: "Run completed", currentLoopRunId: run.Id);
         return ParkResult.Stop;
+    }
+
+    private async Task ClearBackgroundTasksAsync(Guid runId, Guid nodeId)
+    {
+        if (_progressBuffer.Snapshot(runId).BackgroundTasks is null) return;
+        _progressBuffer.SetBackgroundTasks(runId, []);
+        await TrySafe(runId, () => _notifier.BackgroundTasksChangedAsync(runId, nodeId, []));
     }
 
     /// <summary>

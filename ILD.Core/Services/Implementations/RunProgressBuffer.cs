@@ -22,6 +22,7 @@ public sealed class RunProgressBuffer : IRunProgressBuffer
         public readonly object Gate = new();
         public readonly StringBuilder Text = new();
         public long Seq;
+        public IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> Tasks = [];
     }
 
     private readonly ConcurrentDictionary<Guid, Entry> _entries = new();
@@ -39,13 +40,20 @@ public sealed class RunProgressBuffer : IRunProgressBuffer
         }
     }
 
+    public void SetBackgroundTasks(Guid runId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks)
+    {
+        if (tasks.Count == 0 && !_entries.ContainsKey(runId)) return;
+        var entry = _entries.GetOrAdd(runId, _ => new Entry());
+        lock (entry.Gate) entry.Tasks = tasks;
+    }
+
     public RunProgressSnapshot Snapshot(Guid runId)
     {
         if (!_entries.TryGetValue(runId, out var entry))
             return new RunProgressSnapshot(string.Empty, 0);
         lock (entry.Gate)
         {
-            return new RunProgressSnapshot(entry.Text.ToString(), entry.Seq);
+            return new RunProgressSnapshot(entry.Text.ToString(), entry.Seq, entry.Tasks.Count == 0 ? null : entry.Tasks);
         }
     }
 

@@ -1431,6 +1431,20 @@ export interface NodeProgressPayload {
   seq: number;
 }
 
+/** Background work the agent CLI is waiting for, as the CLI reports it. */
+export interface RunBackgroundTask {
+  kind: string;
+  description: string;
+  subagentType?: string | null;
+}
+
+export interface BackgroundTasksChangedPayload {
+  runId: string;
+  nodeId: string;
+  /** The whole set now; empty when the work has ended. */
+  tasks: RunBackgroundTask[];
+}
+
 export interface PrSnapshotChangedPayload {
   runId: string;
 }

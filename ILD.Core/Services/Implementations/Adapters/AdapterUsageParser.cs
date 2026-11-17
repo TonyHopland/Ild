@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// <list type="bullet">
 ///   <item>claude-code: a terminal <c>result</c> event with a <c>usage</c>
 ///   object (<c>input_tokens</c>/<c>output_tokens</c>, plus cache token fields)
-///   and <c>total_cost_usd</c>, the session's running total, read by <see cref="ParseClaude"/>.</item>
+///   and <c>total_cost_usd</c>, the session's running total (a launch of several turns has one such event per turn), read by <see cref="ParseClaude"/>.</item>
 ///   <item>opencode: a <c>step_finish</c> event per model call with a <c>tokens</c>
 ///   object (<c>input</c>/<c>output</c>, plus a nested <c>cache</c>) and a <c>cost</c>,
 ///   read by <see cref="ParseOpenCode"/>.</item>
@@ -22,8 +22,10 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public static class AdapterUsageParser
 {
     /// <summary>
-    /// The usage of one <c>claude --output-format stream-json</c> run, read from its
-    /// <c>result</c> event. Its tokens are the run's own, but <c>total_cost_usd</c> is
+    /// The usage of one <c>claude --output-format stream-json</c> launch, read from its
+    /// <c>result</c> events: one per turn, since the CLI waits for background work and gives the agent
+    /// another turn. Each <c>result</c> carries the tokens of its own turn, so the launch used their sum; <c>total_cost_usd</c>
+    /// is a running total, so the last <c>result</c> holds the whole launch's. It is also
     /// the session's running total: on <c>--resume</c> Claude restores the cost it
     /// recorded in the transcript (see <see cref="ParseClaudeSessionCostBefore"/>) and
     /// counts on from it, so what the run cost is that total minus
@@ -43,8 +45,8 @@ public static class AdapterUsageParser
             {
                 var resultInput = SumLongs(usage, "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens");
                 var resultOutput = SumLongs(usage, "output_tokens");
-                if (resultInput > 0 || resultOutput > 0)
-                    (input, output) = (resultInput, resultOutput);
+                input += resultInput;
+                output += resultOutput;
             }
             if (root.TryGetProperty("total_cost_usd", out var cost) && TryGetDecimal(cost, out var resultTotal))
                 total = resultTotal;

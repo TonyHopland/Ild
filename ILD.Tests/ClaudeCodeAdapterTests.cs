@@ -393,6 +393,62 @@ public class ClaudeCodeAdapterTests
         }
     }
 
+    private static string FixtureStream(string name)
+        => Path.Combine(RepositoryFiles.Root, "ILD.Tests", "Fixtures", "claude-streams", name + ".jsonl");
+
+    [Fact]
+    public async Task ExecuteAsync_of_a_launch_whose_first_turn_left_a_registered_command_running_answers_with_the_follow_up_turn()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath, $"#!/bin/sh\ncat '{FixtureStream("registered-background-command")}'\n");
+        MakeExecutable(scriptPath);
+        try
+        {
+            var tasks = new List<IReadOnlyList<RunBackgroundTask>>();
+            var ctx = BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir) with
+            {
+                OnBackgroundTasks = live => { tasks.Add(live); return Task.CompletedTask; },
+            };
+
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(ctx);
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal("FINISHED", result.Output);
+            Assert.Equal("ea9a0b23-4d43-4f85-be44-45fb3a6ceeda", result.SessionId);
+            Assert.Equal(122, result.Usage!.OutputTokens);
+            Assert.Equal(0.0033050700000000002m, result.Usage.CostUsd);
+            Assert.Equal([1, 0], tasks.Select(t => t.Count));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_succeeds_when_the_CLI_exits_even_though_a_process_it_started_is_still_running()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            $"#!/bin/sh\ncat '{FixtureStream("unregistered-leftover-process")}'\nsleep 30 >/dev/null 2>&1 </dev/null &\n");
+        MakeExecutable(scriptPath);
+        try
+        {
+            var started = DateTime.UtcNow;
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal("STARTED", result.Output);
+            Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(20));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     private static string CreateWorktree()
     {
         var path = Path.Combine(Path.GetTempPath(), $"ild-claude-test-{Guid.NewGuid():N}");

@@ -48,5 +48,8 @@ public record AgentExecutionContext(
     // arguments or environment of its launches point at; a launch's own files are declared by its adapter.
     IReadOnlyList<string>? AgentFiles = null,
     // The token the launch's MCP server calls the agent API with; it names this run or chat, and ILD revokes it when the launch ends.
-    string? AgentApiToken = null
+    string? AgentApiToken = null,
+    // Called with the whole set of background work the CLI is waiting for each time it changes, when the CLI reports it (empty when
+    // it ends). For the run's live view only; never part of the result.
+    Func<IReadOnlyList<RunBackgroundTask>, Task>? OnBackgroundTasks = null
 );

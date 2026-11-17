@@ -190,7 +190,8 @@ public sealed record NodeExecutionContext(
     LoopNode Node,
     IServiceProvider Services,
     CancellationToken CancellationToken,
-    Func<string, Task>? ProgressCallback = null);
+    Func<string, Task>? ProgressCallback = null,
+    Func<IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask>, Task>? BackgroundTasksCallback = null);
 
 /// <summary>
 /// Stateful generator interface. The engine iterates the returned

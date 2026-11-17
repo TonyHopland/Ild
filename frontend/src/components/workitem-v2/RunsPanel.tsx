@@ -7,12 +7,14 @@ import {
   LoopRunStatus,
   LoopRunNodeStatus,
   NodeType,
+  type RunBackgroundTask,
   type RunConversationMessage,
 } from "../../types";
 import { loopRunService } from "../../services/auth";
 import { formatDuration } from "../../utils/duration";
 import { nodeIconOf } from "../../utils/nodeStyles";
 import LiveStream from "../NodeTimeline/LiveStream";
+import BackgroundTasks from "../NodeTimeline/BackgroundTasks";
 import MarkdownRenderer from "../MarkdownRenderer";
 import EdgeArrow from "../NodeTimeline/EdgeArrow";
 import {
@@ -191,6 +193,7 @@ function NodeRow({
   nodeType,
   isLive,
   progressText,
+  backgroundTasks,
   events,
   onRetry,
   onResume,
@@ -204,6 +207,7 @@ function NodeRow({
   nodeType: NodeType | undefined;
   isLive: boolean;
   progressText: string;
+  backgroundTasks: RunBackgroundTask[];
   events: RunEvents;
   /** Absent when the run has ended: an ended run is not started again. */
   onRetry?: (runNodeId: string) => void;
@@ -286,6 +290,7 @@ function NodeRow({
           {isLive ? (
             <div className="wiv2-node-section">
               <LiveStream text={progressText} />
+              <BackgroundTasks tasks={backgroundTasks} />
             </div>
           ) : (
             <div className="wiv2-node-section">
@@ -316,6 +321,7 @@ interface RunsPanelProps {
   workItem: WorkItem;
   runs: LoopRun[];
   progressText: string;
+  backgroundTasks?: RunBackgroundTask[];
   /** Called after a retry so the parent can refresh the run list. */
   onRunsChanged?: () => void;
   /** Halt the in-flight AI node of the current run. */
@@ -403,6 +409,7 @@ function RunDetail({
   runId,
   workItem,
   progressText,
+  backgroundTasks = [],
   onRunsChanged,
   onHalt,
   onResumeSteer,
@@ -753,6 +760,7 @@ function RunDetail({
                   normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
                 }
                 progressText={progressText}
+                backgroundTasks={backgroundTasks}
                 events={runEvents}
                 onRetry={canRetry ? (runNodeId) => void handleRetry(runNodeId) : undefined}
                 onResume={canRetry ? (runNodeId) => void handleResume(runNodeId) : undefined}

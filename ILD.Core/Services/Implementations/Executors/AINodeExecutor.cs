@@ -207,7 +207,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 Environment: feeds.Environment,
                 AgentFiles: feeds.FilePath is null ? null : [feeds.FilePath],
                 AgentApiToken: agentToken?.Token,
-                NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
+                NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken),
+                OnBackgroundTasks: ctx.BackgroundTasksCallback);
             result = await adapter.ExecuteAsync(agentCtx);
 
             // A resume whose session the CLI no longer has fails at startup. Run the node

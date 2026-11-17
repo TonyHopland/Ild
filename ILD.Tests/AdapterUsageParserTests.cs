@@ -128,10 +128,10 @@ public class AdapterUsageParserTests
     }
 
     [Fact]
-    public void Last_usage_event_wins_for_cumulative_streams()
+    public void Claude_tokens_of_a_launch_of_several_turns_are_the_sum_of_its_results()
     {
-        // Edge case: multiple result events across the stream — the last one
-        // (the cumulative final event) must win, not the sum of all.
+        // A launch that waited for background work has one result per turn, each with that turn's own tokens
+        // (Fixtures/claude-streams): the launch used their sum. Cost is the running total of the last result.
         var stdout = string.Join('\n',
             "{\"type\":\"result\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
             "{\"type\":\"result\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
@@ -140,8 +140,8 @@ public class AdapterUsageParserTests
         var usage = AdapterUsageParser.ParseClaude(stdout, 0m);
 
         Assert.NotNull(usage);
-        Assert.Equal(500, usage!.InputTokens);
-        Assert.Equal(250, usage.OutputTokens);
+        Assert.Equal(502, usage!.InputTokens);
+        Assert.Equal(252, usage.OutputTokens);
     }
 
     [Fact]

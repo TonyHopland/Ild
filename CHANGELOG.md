@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A node no longer waits for processes the agent left running,** only for background work it registered, which is now listed on the node.
 - **Starting one preview service now shows the preview as starting, and Stop ends it.**
 
 ### Fixed

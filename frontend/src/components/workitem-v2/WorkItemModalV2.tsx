@@ -441,6 +441,7 @@ export default function WorkItemModalV2({
           workItem={workItem}
           runs={detail.runs}
           progressText={detail.progressText}
+          backgroundTasks={detail.backgroundTasks}
           onRunsChanged={detail.refreshRuns}
           onHalt={() => detail.handleHalt(workItem.currentLoopRunId)}
           onResumeSteer={(note) => detail.handleResumeSteer(workItem.currentLoopRunId, note)}
