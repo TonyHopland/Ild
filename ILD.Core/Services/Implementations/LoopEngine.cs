@@ -151,9 +151,8 @@ public sealed partial class LoopEngine : ILoopEngine
         if (branchOverride is not null)
         {
             var branchNames = sp.GetRequiredService<IBranchNameOverrideService>();
-            var verdict = wi.UseExistingBranch
-                ? await branchNames.InspectExistingAsync(branchOverride, wi.RepositoryId, workItemId, cancellationToken)
-                : await branchNames.InspectAsync(branchOverride, wi.RepositoryId, workItemId, cancellationToken);
+            var verdict = await branchNames.InspectAsync(
+                branchOverride, wi.RepositoryId, workItemId, wi.UseExistingBranch, cancellationToken);
             if (!verdict.IsUsable)
             {
                 await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, verdict.Problem!);

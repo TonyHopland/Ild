@@ -94,7 +94,8 @@ public sealed class WorkItemService : IWorkItemService
             RepositoryId = req.RepositoryId,
             BranchNameOverride = WorkItemMapper.NormalizeBranchRef(req.BranchNameOverride),
             BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride),
-            UseExistingBranch = req.UseExistingBranch,
+            // Continuing a branch needs the name of one.
+            UseExistingBranch = req.UseExistingBranch && WorkItemMapper.NormalizeBranchRef(req.BranchNameOverride) != null,
         };
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
@@ -201,6 +202,9 @@ public sealed class WorkItemService : IWorkItemService
             w.BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride);
         if (req.UseExistingBranch != null)
             w.UseExistingBranch = req.UseExistingBranch.Value;
+        // The flag only means something beside a name, so clearing the name clears it too.
+        if (w.BranchNameOverride == null)
+            w.UseExistingBranch = false;
         // Not retroactive either: a run pins the repository it was created on.
         if (req.RepositoryId != null) w.RepositoryId = req.RepositoryId;
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;

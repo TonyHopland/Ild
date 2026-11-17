@@ -161,12 +161,20 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     {
         ApplyHeaders(http, repo.Provider);
 
+        // Filtered by the source ref on the server, so the one page is the answer.
         var active = await GetArrayAsync(http, Versioned(
             $"{GitApi(repo)}/pullrequests",
             $"searchCriteria.status=active&searchCriteria.sourceRefName={Uri.EscapeDataString(RefName(sourceBranch))}"),
             CollectionProperty);
-        var number = active?.Select(pr => ReadScalar(pr, "pullRequestId")).FirstOrDefault(id => id is not null);
-        return number is null ? null : new RemotePrResult(PrApi(repo, number), WebUrl(repo, number), RemotePrStatus.Open, null);
+        var found = active.FirstOrDefault(pr => ReadScalar(pr, "pullRequestId") is not null);
+        if (found.ValueKind == JsonValueKind.Undefined)
+            return null;
+
+        var number = ReadScalar(found, "pullRequestId")!;
+        var target = ReadString(found, "targetRefName");
+        return new RemotePrResult(
+            PrApi(repo, number), WebUrl(repo, number), RemotePrStatus.Open, null,
+            target?.StartsWith("refs/heads/", StringComparison.Ordinal) == true ? target["refs/heads/".Length..] : target);
     }
 
     protected override async Task<string?> ReadHeadShaAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)

@@ -144,6 +144,24 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task A_run_continuing_a_branch_fails_clearly_when_the_open_pull_request_targets_another_base()
+    {
+        var b = new PrNodeBuilder();
+        b.Run.UseExistingBranch = true;
+        b.Run.BranchName = "Planning";
+        b.Run.BaseBranchOverride = "release/2.0";
+        b.Remote.Setup(r => r.FindOpenPullRequestAsync(b.Repository.CloneUrl, "Planning"))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/7", RemotePrStatus.Open, null, "release/1.0"));
+
+        var outcomes = await b.RunAsync();
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Contains("targets 'release/1.0'", fail.Reason);
+        Assert.Contains("base branch is 'release/2.0'", fail.Reason);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
+    }
+
+    [Fact]
     public async Task A_run_continuing_a_branch_opens_a_pull_request_when_none_is_open()
     {
         var b = new PrNodeBuilder();

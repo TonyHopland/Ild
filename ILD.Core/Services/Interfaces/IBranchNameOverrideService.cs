@@ -66,3 +66,21 @@ public interface IBranchNameOverrideService
         string? workItemId,
         CancellationToken cancellationToken = default);
 }
+
+public static class BranchNameOverrideServiceExtensions
+{
+    /// <summary>
+    /// The one place that picks between the two questions by the item's <c>UseExistingBranch</c> flag. They are two
+    /// interface methods, not one with a mode, because a mock's expression tree cannot omit an optional argument.
+    /// </summary>
+    public static Task<BranchNameVerdict> InspectAsync(
+        this IBranchNameOverrideService service,
+        string? branchName,
+        Guid? repositoryId,
+        string? workItemId,
+        bool useExistingBranch,
+        CancellationToken cancellationToken = default)
+        => useExistingBranch
+            ? service.InspectExistingAsync(branchName, repositoryId, workItemId, cancellationToken)
+            : service.InspectAsync(branchName, repositoryId, workItemId, cancellationToken);
+}

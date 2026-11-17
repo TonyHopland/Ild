@@ -207,7 +207,18 @@ public sealed class PRNodeExecutor : INodeExecutor
                 ? await remote.FindOpenPullRequestAsync(repo.CloneUrl, branch)
                 : null;
             if (reused is not null)
+            {
+                // The open pull request was made before this run, perhaps against a base the item has since
+                // moved off. Pushing to it and carrying on would put the work under the wrong target.
+                if (reused.TargetBranch is { Length: > 0 } openTarget && openTarget != target)
+                {
+                    yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                        $"The open pull request for '{branch}' targets '{openTarget}', but this run's base branch is '{target}'. "
+                        + "Retarget or close that pull request, or change the work item's base branch, then re-run.");
+                    yield break;
+                }
                 prResult = reused;
+            }
             while (reused is null)
             {
                 prResult = null;

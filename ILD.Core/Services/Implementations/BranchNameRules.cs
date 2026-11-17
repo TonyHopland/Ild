@@ -103,6 +103,20 @@ public static class BranchNameRules
         return null;
     }
 
+    /// <summary>
+    /// <see cref="ValidateOverrides"/> for an edit of an existing item, where a branch name that is not sent is the
+    /// one the item already has: that name is only looked up when the flag needs it.
+    /// </summary>
+    public static async Task<string?> ValidateEditAsync(
+        Interfaces.IWorkItemManager workItems, string workItemId,
+        string? branchNameOverride, string? baseBranchOverride, bool? useExistingBranch)
+    {
+        var storedBranchName = useExistingBranch == true && branchNameOverride is null
+            ? (await workItems.GetWorkItemAsync(workItemId))?.BranchNameOverride
+            : null;
+        return ValidateOverrides(branchNameOverride, baseBranchOverride, useExistingBranch, storedBranchName);
+    }
+
     /// <summary>The subject mid-sentence, e.g. "a branch name".</summary>
     private static string LowerSubject(string subject)
         => "a " + char.ToLowerInvariant(subject[0]) + subject[1..];

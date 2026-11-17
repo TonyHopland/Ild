@@ -243,7 +243,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                     s.SetProperty(w => w.BranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
                 if (proposal.ProposedBaseBranchOverride is { } baseBranch)
                     s.SetProperty(w => w.BaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
-                if (proposal.ProposedUseExistingBranch is { } useExisting)
+                if (ProposedUseExistingBranch(proposal) is { } useExisting)
                     s.SetProperty(w => w.UseExistingBranch, useExisting);
                 if (proposedDependencies is not null)
                     s.SetProperty(w => w.DependenciesJson, proposedDependencies);
@@ -402,13 +402,22 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Compare(WorkItemHistoryFields.BranchNameOverride, proposal.SnapshotBranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
         if (proposal.ProposedBaseBranchOverride is { } baseBranch)
             Compare(WorkItemHistoryFields.BaseBranchOverride, proposal.SnapshotBaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
-        if (proposal.ProposedUseExistingBranch is { } useExisting)
+        if (ProposedUseExistingBranch(proposal) is { } useExisting)
             Compare(WorkItemHistoryFields.UseExistingBranch,
                 WorkItemHistoryFields.Encode(proposal.SnapshotUseExistingBranch), WorkItemHistoryFields.Encode(useExisting));
         if (proposedDependencies is not null)
             Compare(WorkItemHistoryFields.Dependencies, expectedDependencies, proposedDependencies);
         return changes;
     }
+
+    /// <summary>
+    /// What approving the proposal makes the item's flag, or null when it leaves it alone. The flag only means
+    /// something beside a branch name, so a proposal that clears the name clears the flag with it.
+    /// </summary>
+    private static bool? ProposedUseExistingBranch(WorkItemEditProposal proposal)
+        => proposal.ProposedBranchNameOverride is { } branch && WorkItemMapper.NormalizeBranchRef(branch) == null
+            ? false
+            : proposal.ProposedUseExistingBranch;
 
     private static IReadOnlyList<string> DeserializeIds(string? json)
         => json is null ? [] : WorkItemMapper.DeserializeDependencies(json);

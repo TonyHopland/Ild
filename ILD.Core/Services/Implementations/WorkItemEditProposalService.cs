@@ -26,12 +26,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             return Invalid("Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch, addDependencies or removeDependencies.");
         if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
             return Invalid("A proposed title cannot be blank.");
-        // A name is only needed from the item when the proposal does not give one.
-        var storedBranchName = request.UseExistingBranch == true && request.BranchNameOverride is null
-            ? (await _workItems.GetWorkItemAsync(workItemId))?.BranchNameOverride
-            : null;
-        if (BranchNameRules.ValidateOverrides(
-                request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch, storedBranchName) is { } branchError)
+        if (await BranchNameRules.ValidateEditAsync(
+                _workItems, workItemId, request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch) is { } branchError)
             return Invalid(branchError);
 
         var addDependencies = TrimIds(request.AddDependencies);

@@ -6,6 +6,7 @@ using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
@@ -16,7 +17,22 @@ namespace ILD.Tests;
 /// </summary>
 public class FindOpenPullRequestTests
 {
-    private static RemoteProviderService CreateService(TestDb db, HttpMessageHandler handler, string type, string url)
+    private sealed class ListLogger : ILogger<RemoteProviderService>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    private sealed class FailingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => throw new HttpRequestException("connection refused");
+    }
+
+    private static RemoteProviderService CreateService(TestDb db, HttpMessageHandler handler, string type, string url, ILogger<RemoteProviderService>? log = null)
     {
         db.Context.RemoteProviders.Add(new RemoteProvider
         {
@@ -31,12 +47,13 @@ public class FindOpenPullRequestTests
                 new GitHubRemoteGitProviderAdapter(),
                 new AzureDevOpsRemoteGitProviderAdapter(),
             },
-            new HttpClient(handler));
+            new HttpClient(handler),
+            log);
     }
 
-    private static string Pull(string headRef, int number)
+    private static string Pull(string headRef, int number, string baseRef = "main")
         => "{\"url\":\"https://api.test/repos/o/r/pulls/" + number + "\",\"html_url\":\"https://test/o/r/pulls/" + number
-            + "\",\"head\":{\"ref\":\"" + headRef + "\"}}";
+            + "\",\"head\":{\"ref\":\"" + headRef + "\"},\"base\":{\"ref\":\"" + baseRef + "\"}}";
 
     private static RoutingHttpHandler Pulls(string json)
         => new RoutingHttpHandler().Map(u => u.Contains("/pulls?", StringComparison.Ordinal), () => json);
@@ -79,6 +96,50 @@ public class FindOpenPullRequestTests
 
     [Theory]
     [MemberData(nameof(Forges))]
+    public async Task The_branch_the_found_pull_request_targets_is_reported(string type, string providerUrl, string repoUrl)
+    {
+        using var db = new TestDb();
+        var handler = Pulls("[" + Pull("Planning", 7, "release/1.0") + "]");
+
+        var found = await CreateService(db, handler, type, providerUrl).FindOpenPullRequestAsync(repoUrl, "Planning");
+
+        Assert.Equal("release/1.0", found!.TargetBranch);
+    }
+
+    [Theory]
+    [MemberData(nameof(Forges))]
+    public async Task A_pull_request_beyond_the_first_page_is_found(string type, string providerUrl, string repoUrl)
+    {
+        // A forge that ignores the head filter hands back everything open, a page at a time.
+        using var db = new TestDb();
+        var firstPage = "[" + string.Join(",", Enumerable.Range(1, 50).Select(n => Pull("other-" + n, n))) + "]";
+        var handler = new RoutingHttpHandler()
+            .Map(u => u.Contains("page=1&", StringComparison.Ordinal), () => firstPage)
+            .Map(u => u.Contains("page=2&", StringComparison.Ordinal), () => "[" + Pull("Planning", 77) + "]");
+
+        var found = await CreateService(db, handler, type, providerUrl).FindOpenPullRequestAsync(repoUrl, "Planning");
+
+        Assert.Equal("https://test/o/r/pulls/77", found!.HtmlUrl);
+        Assert.Equal(2, handler.Urls.Count());
+    }
+
+    [Theory]
+    [MemberData(nameof(Forges))]
+    public async Task A_failed_lookup_is_null_and_says_so_in_the_log(string type, string providerUrl, string repoUrl)
+    {
+        using var db = new TestDb();
+        var log = new ListLogger();
+
+        var found = await CreateService(db, new FailingHandler(), type, providerUrl, log).FindOpenPullRequestAsync(repoUrl, "Planning");
+
+        Assert.Null(found);
+        var entry = Assert.Single(log.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("Planning", entry.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(Forges))]
     public async Task No_pull_request_for_the_branch_is_null(string type, string providerUrl, string repoUrl)
     {
         using var db = new TestDb();
@@ -106,12 +167,13 @@ public class FindOpenPullRequestTests
     public async Task Azure_DevOps_finds_the_active_pull_request_by_its_source_ref()
     {
         using var db = new TestDb();
-        var handler = AzurePulls("{\"value\":[{\"pullRequestId\":42}]}");
+        var handler = AzurePulls("{\"value\":[{\"pullRequestId\":42,\"targetRefName\":\"refs/heads/release/1.0\"}]}");
 
         var found = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org")
             .FindOpenPullRequestAsync(AzureRepo, "Planning");
 
         Assert.NotNull(found);
+        Assert.Equal("release/1.0", found.TargetBranch);
         Assert.EndsWith("/pullrequests/42", found.Url);
         Assert.EndsWith("/pullrequest/42", found.HtmlUrl);
         var url = Assert.Single(handler.Urls);

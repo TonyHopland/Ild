@@ -48,7 +48,13 @@ public class RemoteProviderService : IRemoteProvider
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null) return null;
         try { return await resolved.Adapter.FindOpenPullRequestAsync(_http, resolved, sourceBranch); }
-        catch { return null; }
+        catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException)
+        {
+            // Null still means "none found" to the caller, which goes on to create one; the log is what tells a
+            // failed lookup from an empty one when that create is refused as a duplicate.
+            _log?.LogWarning(ex, "Looking up the open pull request for {Branch} failed on {RepoUrl}", sourceBranch, RepositoryManager.WithoutUserInfo(repoUrl));
+            return null;
+        }
     }
 
     public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber, string? expectedHeadSha = null)
