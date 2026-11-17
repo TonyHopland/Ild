@@ -370,6 +370,10 @@ internal sealed class WorktreePreviewLifecycle : IDisposable
         IReadOnlyList<PreviewServiceConfig> order;
         try
         {
+            // A gate released while the wait was being cancelled is still handed to this start, so a stop
+            // requested before the gate was won has to be honoured here or the services launch after it.
+            cancellationToken.ThrowIfCancellationRequested();
+
             var loaded = profile.Loaded;
             if (plan.ReplacesRuntime)
             {
