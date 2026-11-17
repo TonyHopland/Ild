@@ -444,8 +444,6 @@ export default function WorkItemModalV2({
           onRunsChanged={detail.refreshRuns}
           onHalt={() => detail.handleHalt(workItem.currentLoopRunId)}
           onResumeSteer={(note) => detail.handleResumeSteer(workItem.currentLoopRunId, note)}
-          onRestartWaiting={(note) => detail.handleRestartWaiting(workItem.currentLoopRunId, note)}
-          onResumeWaiting={(note) => detail.handleResumeWaiting(workItem.currentLoopRunId, note)}
           onRetryFailed={(note) => detail.handleRetryFailed(workItem.currentLoopRunId, note)}
           onResumeFailed={(note) => detail.handleResumeFailed(workItem.currentLoopRunId, note)}
           onCleanupDone={detail.handleCleanupDone}

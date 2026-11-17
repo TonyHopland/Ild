@@ -46,10 +46,8 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
     public BlankOutput BlankOutput { get; set; }
     public bool ProviderErrorIsTheFailure { get; set; }
     public bool RawEventsExplainFailure { get; set; }
-    public string? Fingerprint { get; set; }
     public string? PrepareFailure { get; set; }
     public Exception? ParseThrows { get; set; }
-    public Action? AfterTurnEnded { get; set; }
     public Action? OnParse { get; set; }
     public ScriptedTurn? Turn { get; private set; }
 
@@ -76,7 +74,6 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
 
     protected override string CliName => "scripted";
     protected override string StartHelp => "install it.";
-    protected override string? LaunchFingerprint => Fingerprint;
 
     protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => Turn = new ScriptedTurn(this, worktreePath, gateway);
@@ -163,8 +160,6 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
         {
             Step("stdout");
             _stdout = await stdout.ReadToEndAsync();
-            if (TurnEnded is not null) await TurnEnded();
-            adapter.AfterTurnEnded?.Invoke();
         }
 
         public override Task AfterTimeoutAsync(Task stdout)

@@ -320,14 +320,10 @@ interface RunsPanelProps {
   onRunsChanged?: () => void;
   /** Halt the in-flight AI node of the current run. */
   onHalt?: () => void | Promise<unknown>;
-  /** Restart a node that is Waiting for ILD, stopping its processes. */
-  onRestartWaiting?: (note: string) => void | Promise<unknown>;
   /** Retry the node the current run is parked on after it failed (Node Failed, Out of Memory): it starts over from scratch. */
   onRetryFailed?: (note: string) => void | Promise<unknown>;
   /** Resume that failed node in the same agent session, from the run's files as they were left. */
   onResumeFailed?: (note: string) => void | Promise<unknown>;
-  /** Resume a node that is Waiting for ILD, leaving its processes running. */
-  onResumeWaiting?: (note: string) => void | Promise<unknown>;
   /** Resume a halted run with optional steering guidance. */
   onResumeSteer?: (note: string) => void | Promise<unknown>;
   /** Cleanup handlers reused from the work item dialog for a halted run. */
@@ -410,10 +406,8 @@ function RunDetail({
   onRunsChanged,
   onHalt,
   onResumeSteer,
-  onRestartWaiting,
   onRetryFailed,
   onResumeFailed,
-  onResumeWaiting,
   onCleanupDone,
   onCleanupBacklog,
   onReclaimRun,
@@ -728,10 +722,8 @@ function RunDetail({
         workItemStatus={workItem.status}
         onHalt={holdingCurrentRun("halt", onHalt)}
         onResumeSteer={holdingCurrentRun("steer", onResumeSteer)}
-        onRestartWaiting={holdingCurrentRun("steer", onRestartWaiting)}
         onRetryFailed={holdingCurrentRun("steer", onRetryFailed)}
         onResumeFailed={holdingCurrentRun("steer", onResumeFailed)}
-        onResumeWaiting={holdingCurrentRun("steer", onResumeWaiting)}
         onCleanupDone={holdingCurrentRun("abandon", onCleanupDone)}
         onCleanupBacklog={holdingCurrentRun("abandon", onCleanupBacklog)}
         blocked={busy || runLock.pendingOf(currentRunId) !== null}

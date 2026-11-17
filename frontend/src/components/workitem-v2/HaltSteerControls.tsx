@@ -19,16 +19,6 @@ interface HaltSteerControlsProps {
   /** Halt the in-flight AI node. */
   onHalt?: () => void | Promise<unknown>;
   /**
-   * Restart a node that is Waiting for ILD: its running processes are stopped and the node starts over
-   * from scratch, with the optional note after its prompt. Offered with `onResumeWaiting`.
-   */
-  onRestartWaiting?: (note: string) => void | Promise<unknown>;
-  /**
-   * Resume a node that is Waiting for ILD in the same session, leaving its processes running. The agent
-   * gets only the optional note.
-   */
-  onResumeWaiting?: (note: string) => void | Promise<unknown>;
-  /**
    * Retry the node a run is parked on after it failed: it starts over from scratch, with the optional note
    * after its prompt. Offered with `onResumeFailed`, for a run parked as Node Failed or Out of Memory.
    */
@@ -133,8 +123,6 @@ export default function HaltSteerControls({
   workItemStatus,
   onHalt,
   onResumeSteer,
-  onRestartWaiting,
-  onResumeWaiting,
   onRetryFailed,
   onResumeFailed,
   onCleanupDone,
@@ -160,10 +148,6 @@ export default function HaltSteerControls({
   const throttled = isHalted && isThrottleParked(run);
   const stepCapped = isHalted && isStepCapParked(run);
   const globalMissing = isHalted && isGlobalMissingParked(run);
-  // Processes the agent left running when its turn ended: ILD waits for them (or has stopped waiting after
-  // too many cycles), and the person can restart or resume the node meanwhile.
-  const childWait =
-    isHalted && !!run.childWait && !!onRestartWaiting && !!onResumeWaiting ? run.childWait : null;
   // The node the run is parked on after it failed, with what the person can do about it.
   const failedNode =
     isWaitingHuman &&
@@ -228,33 +212,6 @@ export default function HaltSteerControls({
 
   const memoryWarning = ` The same work is likely to run out of memory again unless the memory limit (${RUN_MEMORY_LIMIT_SETTING}) is raised or the node does less at once.`;
   const noteAdded = "anything you typed above is added after its prompt";
-  const waitingActions: [NodeAction, NodeAction] | null =
-    childWait && onRestartWaiting && onResumeWaiting
-      ? [
-          {
-            label: "Restart node",
-            title: "Stop the running processes and start this node again from scratch",
-            confirmLabel: "Confirm restart",
-            pendingLabel: "Restarting…",
-            groupLabel: "Confirm restart node",
-            prompt:
-              "Restart stops the processes that are still running and starts this node again from scratch. The agent is not told about the stopped processes; anything you typed above is added after its prompt.",
-            tone: "danger",
-            act: onRestartWaiting,
-          },
-          {
-            label: "Resume node",
-            title: "Run this node again in the same session, leaving the processes running",
-            confirmLabel: "Confirm resume",
-            pendingLabel: "Resuming…",
-            groupLabel: "Confirm resume node",
-            prompt:
-              "Resume runs this node again in the same session and leaves the processes running. The agent gets only what you typed above (or a plain continue) and what it already knows — nothing about the processes.",
-            tone: "primary",
-            act: onResumeWaiting,
-          },
-        ]
-      : null;
   const failedActions: [NodeAction, NodeAction] | null =
     failedNode && onRetryFailed && onResumeFailed
       ? [
@@ -389,10 +346,8 @@ export default function HaltSteerControls({
           <div className="wiv2-feedback-title">
             {throttled && "Provider interrupted — resume when ready"}
             {stepCapped && "Enough AI steps — carry on?"}
-            {childWait?.waiting && "Waiting for ILD — its processes are still running"}
-            {childWait && !childWait.waiting && "Processes still running — restart or resume"}
             {globalMissing && "Global variables missing — set them, then resume"}
-            {!throttled && !stepCapped && !globalMissing && !childWait && "Halted — steer & resume"}
+            {!throttled && !stepCapped && !globalMissing && "Halted — steer & resume"}
           </div>
           {stepCapped && (
             <div className="feedback-reason">
@@ -422,24 +377,6 @@ export default function HaltSteerControls({
               )}
             </div>
           )}
-          {childWait && (
-            <div className="feedback-reason">
-              <div>
-                {childWait.waiting
-                  ? "The agent ended its turn while these processes it started were still running. ILD is waiting for them and will wake the agent with how they ended."
-                  : "The agent ended its turn with these processes still running several times in a row, so ILD stopped waiting for them."}
-              </div>
-              <ul className="wiv2-child-processes">
-                {childWait.processes.map((p) => (
-                  <li key={p.pid}>
-                    <code>
-                      {p.pid}: {p.commandLine}
-                    </code>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
           {throttled && (
             <div className="feedback-reason">
               <div>{interruption?.error ?? "An AI provider interrupted this run."}</div>
@@ -453,35 +390,21 @@ export default function HaltSteerControls({
             value={steerNote}
             onChange={(e) => setSteerNote(e.target.value)}
             placeholder={
-              childWait
-                ? "Optional input for the agent — leave blank to add nothing…"
-                : globalMissing
-                  ? "Optional guidance — it is added to the run's conversation. Leave blank to just continue…"
-                  : "Optional guidance for the resumed agent — leave blank to just continue…"
+              globalMissing
+                ? "Optional guidance — it is added to the run's conversation. Leave blank to just continue…"
+                : "Optional guidance for the resumed agent — leave blank to just continue…"
             }
             rows={3}
           />
           <div className="feedback-actions">
-            {waitingActions ? (
-              <NodeActionButtons
-                first={waitingActions[0]}
-                second={waitingActions[1]}
-                note={steerNote}
-                onStart={() => setErrorText("")}
-                onActed={noteActed}
-                onError={setErrorText}
-                blocked={blocked}
-              />
-            ) : (
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => void handleResume()}
-                disabled={resuming || blocked}
-              >
-                {resuming ? "Resuming…" : "Resume"}
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => void handleResume()}
+              disabled={resuming || blocked}
+            >
+              {resuming ? "Resuming…" : "Resume"}
+            </button>
             {onCleanupDone && (
               <button
                 type="button"

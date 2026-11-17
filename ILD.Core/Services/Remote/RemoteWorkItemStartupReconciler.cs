@@ -47,6 +47,18 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        try
+        {
+            using var parkScope = _scopes.CreateScope();
+            var parked = await parkScope.ServiceProvider.GetRequiredService<ILoopEngine>().ParkRunsOfTheRetiredProcessWaitAsync();
+            if (parked > 0)
+                _log.LogInformation("Startup reconcile: {Count} run(s) that waited for their agent's leftover processes are parked for a person", parked);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Startup reconcile: could not convert the runs that waited for their agent's leftover processes");
+        }
+
         var opts = _options.CurrentValue;
 
         if (!opts.Enabled || string.IsNullOrWhiteSpace(opts.BaseUrl))

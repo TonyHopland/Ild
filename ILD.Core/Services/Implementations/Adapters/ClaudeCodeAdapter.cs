@@ -77,7 +77,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     protected override string StartHelp
         => "install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal).";
     protected override ILogger Logger => _logger;
-    protected override string? LaunchFingerprint => "--output-format stream-json";
 
     protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
@@ -141,7 +140,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
 
         public override async Task ReadStdoutAsync(StreamReader stdout)
-            => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel, TurnEnded);
+            => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
 
         public override StreamResult ParseStream() => _stdout!;
 
@@ -332,8 +331,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         StreamReader reader,
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
-        CancellationToken ct,
-        Func<Task>? onResult = null)
+        CancellationToken ct)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
@@ -403,7 +401,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             else if (string.Equals(eventType, "result", StringComparison.OrdinalIgnoreCase))
             {
-                if (onResult is not null) await onResult().ConfigureAwait(false);
                 var isError = root.TryGetProperty("is_error", out var errFlag)
                     && errFlag.ValueKind == JsonValueKind.True;
                 if (isError && TryGetString(root, "result", out var errResult) && !string.IsNullOrWhiteSpace(errResult))

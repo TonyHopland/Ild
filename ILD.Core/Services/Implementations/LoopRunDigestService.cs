@@ -46,7 +46,6 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
                 r.ThrottleAutoResumeCount,
                 r.NodeExecutionCount,
                 r.ThrottleResetAt,
-                r.ChildWaitCycleCount,
                 r.CurrentNodeId,
                 r.IncomingEdgeId,
                 r.PrUrl,
@@ -136,7 +135,6 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
             run.TemplateId, run.TemplateName, run.TemplateVersion,
             run.CreatedAt, run.StartedAt, run.CompletedAt,
             run.AiTraversalCount, run.ThrottleAutoResumeCount, run.NodeExecutionCount, run.ThrottleResetAt,
-            run.Status == LoopRunStatus.WaitingHuman && run.IsHalted && run.HaltReason == HaltReason.WaitingForChildren, run.ChildWaitCycleCount,
             nodes, feedbackDigest,
             run.PrUrl is null ? null : BuildPr(run.PrUrl, run.IsPrMerged, PrSnapshotJson.TryParse(run.PrSnapshot)));
     }

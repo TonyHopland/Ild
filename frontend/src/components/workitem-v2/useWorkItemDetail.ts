@@ -960,16 +960,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     return runAction(() => loopRunService.resumeSteer(runId, note), "resume run");
   };
 
-  const handleRestartWaiting = (runId: string | null, note?: string) => {
-    if (!runId) return Promise.resolve();
-    return runAction(() => loopRunService.restartWaitingForIld(runId, note), "restart node");
-  };
-
-  const handleResumeWaiting = (runId: string | null, note?: string) => {
-    if (!runId) return Promise.resolve();
-    return runAction(() => loopRunService.resumeWaitingForIld(runId, note), "resume node");
-  };
-
   const handleRetryFailed = (runId: string | null, note?: string) => {
     if (!runId) return Promise.resolve();
     return runAction(() => loopRunService.retryFailedNode(runId, note), "retry node");
@@ -1111,8 +1101,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleMerge,
     handleHalt,
     handleResumeSteer,
-    handleRestartWaiting,
-    handleResumeWaiting,
     handleRetryFailed,
     handleResumeFailed,
     handleCleanupDone,
