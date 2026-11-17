@@ -407,6 +407,46 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Update_sets_and_leaves_the_use_existing_branch_flag_alone()
+    {
+        var created = await _svc.CreateAsync(
+            new CreateWorkItemRequest { Title = "x", BranchNameOverride = "Planning", UseExistingBranch = true },
+            TestContext.Current.CancellationToken);
+        Assert.True(created.UseExistingBranch);
+
+        // Null means "not part of this edit".
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
+        Assert.True(titleOnly!.UseExistingBranch);
+
+        var off = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { UseExistingBranch = false }, TestContext.Current.CancellationToken);
+        Assert.False(off!.UseExistingBranch);
+        Assert.False((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.UseExistingBranch);
+    }
+
+    [Fact]
+    public async Task Clearing_the_branch_name_clears_use_existing_branch_with_it()
+    {
+        var created = await _svc.CreateAsync(
+            new CreateWorkItemRequest { Title = "x", BranchNameOverride = "Planning", UseExistingBranch = true },
+            TestContext.Current.CancellationToken);
+
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" }, TestContext.Current.CancellationToken);
+
+        Assert.Null(cleared!.BranchNameOverride);
+        Assert.False(cleared.UseExistingBranch);
+        Assert.False((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.UseExistingBranch);
+    }
+
+    [Fact]
+    public async Task Create_does_not_store_use_existing_branch_without_a_branch_name()
+    {
+        var created = await _svc.CreateAsync(
+            new CreateWorkItemRequest { Title = "x", UseExistingBranch = true }, TestContext.Current.CancellationToken);
+
+        Assert.False(created.UseExistingBranch);
+    }
+
+    [Fact]
     public async Task Update_replaces_the_repository_and_leaves_it_alone_when_null()
     {
         var repoA = Guid.NewGuid();

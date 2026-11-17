@@ -34,7 +34,9 @@ public sealed class WorkItemTools
         [Description("Optional custom branch name used verbatim by every run of the item, instead of the generated ild/wi-<id>-run-<n> name. Must be a valid git branch name. Omit for the default.")]
         string? branchNameOverride = null,
         [Description("Optional branch every run of the item starts from and opens its PR against, instead of the repository's default branch. Must exist on the remote when the run starts. Omit for the default.")]
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        [Description("Optional. true makes the item continue a branch that ALREADY exists on origin: every run checks out branchNameOverride (required with this) at its latest commit, commits on top of it and pushes to that same branch, fast-forward only. ILD never force-pushes or deletes a remote branch. A run fails with a clear error if the branch is not on origin. Without it, a branchNameOverride that already exists on origin is refused as a name clash. baseBranchOverride (or the repository default) is only the branch the PR targets: the run is never rebased onto it. If a PR is already open for the branch it is reused. Omit for false.")]
+        bool? useExistingBranch = null)
     {
         var body = new
         {
@@ -46,6 +48,7 @@ public sealed class WorkItemTools
             tags,
             branchNameOverride,
             baseBranchOverride,
+            useExistingBranch,
         };
         return _ild.PostJsonAsync("api/v1/agent/workitems", body);
     }
@@ -61,9 +64,11 @@ public sealed class WorkItemTools
         [Description("Optional replacement custom branch name. Omit to leave it unchanged; pass an empty string to go back to the generated per-run branch name. Only the item's next run is affected.")]
         string? branchNameOverride = null,
         [Description("Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.")]
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        [Description("Optional. Omit to leave unchanged. true makes the item continue the branch that ALREADY exists on origin named by branchNameOverride (this call's or the item's current one; required): runs check it out at its latest commit, commit on top and push to it, fast-forward only — no force-push, no deletion, and a missing branch fails the run clearly. false goes back to a fresh branch (a name that exists on origin is then refused as a clash). baseBranchOverride is only the PR target. An already-open PR for the branch is reused. Only the item's next run is affected.")]
+        bool? useExistingBranch = null)
     {
-        var body = new { title, description, tags, branchNameOverride, baseBranchOverride };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch };
         return _ild.PutJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}", body);
     }
 
@@ -104,6 +109,8 @@ public sealed class WorkItemTools
         string? branchNameOverride = null,
         [Description("Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.")]
         string? baseBranchOverride = null,
+        [Description("Proposed true or false for continuing a branch that ALREADY exists on origin: with true, runs check out the item's branchNameOverride (required, here or already on the item) at its latest commit, commit on top and push to it, fast-forward only — no force-push or deletion; a missing branch fails the run clearly. baseBranchOverride is only the PR target. Omit to leave it out of the proposal.")]
+        bool? useExistingBranch = null,
         [Description("Proposed work item GUIDs for the item to start depending on. Each must exist, not already be a dependency, and not create a cycle. Omit to add none.")]
         string[]? addDependencies = null,
         [Description("Proposed work item GUIDs for the item to stop depending on. Each must be a current dependency. Omit to remove none.")]
@@ -111,7 +118,7 @@ public sealed class WorkItemTools
         [Description("Optional short reason for the edit (up to 2000 chars), shown to the human deciding.")]
         string? rationale = null)
     {
-        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, addDependencies, removeDependencies, rationale };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch, addDependencies, removeDependencies, rationale };
         return _ild.PostJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}/edit-proposals", body);
     }
 

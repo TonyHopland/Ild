@@ -14,6 +14,22 @@ public class BranchNameRulesTests
         => Assert.Null(BranchNameRules.Validate(name));
 
     [Theory]
+    [InlineData("Planning", null, true, null, null)]
+    [InlineData(null, null, true, "Planning", null)]
+    [InlineData(null, null, true, null, "useExistingBranch needs a branchNameOverride")]
+    [InlineData("", null, true, "Planning", "useExistingBranch needs a branchNameOverride")]
+    [InlineData(null, null, false, null, null)]
+    [InlineData(null, null, null, null, null)]
+    public void Using_an_existing_branch_needs_a_branch_name_to_name_it(
+        string? requested, string? baseBranch, bool? useExisting, string? stored, string? error)
+    {
+        var problem = BranchNameRules.ValidateOverrides(requested, baseBranch, useExisting, stored);
+
+        if (error is null) Assert.Null(problem);
+        else Assert.StartsWith(error, problem);
+    }
+
+    [Theory]
     // git check-ref-format's rules, in the order a human is likely to trip them.
     [InlineData("feature foo")]        // space
     [InlineData("feature\tfoo")]       // control character

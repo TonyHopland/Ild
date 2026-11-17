@@ -315,6 +315,62 @@ public class StartNodeExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_continuing_an_existing_branch_starts_at_its_origin_tip_and_is_not_rebased()
+    {
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "Planning")).ReturnsAsync(true);
+        repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/Planning", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        // A stale local branch of that name would be attached as it is.
+        repoManager.Setup(m => m.LocalBranchExistsAsync(_baseRepo, "Planning")).ReturnsAsync(true);
+        repoManager.Setup(m => m.DeleteLocalBranchAsync(_baseRepo, "Planning")).ReturnsAsync(true);
+        repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, "Planning")).ReturnsAsync("/tmp/worktree");
+
+        var (mgr, sp, run, node) = BuildContext(repoManager);
+        run.BranchName = "Planning";
+        run.UseExistingBranch = true;
+        run.BaseBranchOverride = "release/1.0";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WorktreeReady);
+        mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/Planning", It.IsAny<CancellationToken>()), Times.Once);
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), "origin/release/1.0", It.IsAny<CancellationToken>()), Times.Never);
+        mgr.Verify(m => m.DeleteLocalBranchAsync(_baseRepo, "Planning"), Times.Once);
+        mgr.Verify(m => m.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_run_continuing_a_branch_missing_from_origin_fails_the_node_without_creating_it()
+    {
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsInBaseRepoAsync(_baseRepo, "Planning")).ReturnsAsync(false);
+
+        var (mgr, sp, run, node) = BuildContext(repoManager);
+        run.BranchName = "Planning";
+        run.UseExistingBranch = true;
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Contains("origin/Planning", fail.Reason);
+        Assert.Contains("does not exist", fail.Reason);
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
     public async Task A_base_branch_missing_from_origin_fails_the_node_instead_of_falling_back()
     {
         // Silently starting from main would build the run on history the human

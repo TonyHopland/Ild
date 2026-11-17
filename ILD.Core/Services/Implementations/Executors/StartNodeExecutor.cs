@@ -133,6 +133,10 @@ public sealed class StartNodeExecutor : INodeExecutor
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
         var baseBranch = RunBaseBranch.Resolve(run, repo);
+        // A run that continues an existing branch starts from that branch's tip,
+        // not from the base, and is never rebased onto the base: the base is only
+        // where its PR points.
+        var continuing = run.UseExistingBranch && run.BranchName is not null;
 
         // The worktree shares the base clone's refs, so adding it and fetching in
         // it are held under the repository's lock with the base clone's own work.
@@ -143,10 +147,19 @@ public sealed class StartNodeExecutor : INodeExecutor
                 ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
             if (!baseOk) return (false, null, null, baseError);
 
+            // `worktree add -b` would attach a stale local branch of this name as it
+            // is; dropping it lets the worktree branch from the origin tip the base
+            // repo was just reset to. Only a local ref in ILD's own clone goes.
+            if (continuing && await repoManager.LocalBranchExistsAsync(basePath!, branch)
+                && !await repoManager.DeleteLocalBranchAsync(basePath!, branch))
+                return (false, null, null, $"could not replace the stale local branch '{branch}' with origin/{branch}");
+
             path = (await CreateEnvironmentAsync(ctx, sp, host, wi.Id,
                 new RunEnvironmentRequest(run.Id, basePath!, branch, repo.Id, KeepPreviewData: repo.KeepPreviewData))).WorkingDirectory;
             await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         }
+        if (continuing)
+            return (true, path, branch, null);
         try
         {
             var rebase = await repoManager.RebaseAsync(path, $"origin/{baseBranch}", ctx.CancellationToken);
@@ -194,7 +207,8 @@ public sealed class StartNodeExecutor : INodeExecutor
 
     /// <summary>
     /// Leaves the base repository present and checked out at
-    /// <c>origin/&lt;baseBranch&gt;</c>, or says why it could not be.
+    /// <c>origin/&lt;baseBranch&gt;</c> (or, for a run continuing an existing
+    /// branch, at that branch's origin tip), or says why it could not be.
     /// </summary>
     /// <remarks>
     /// One step rather than four, because the worktree is created from whatever
@@ -215,6 +229,19 @@ public sealed class StartNodeExecutor : INodeExecutor
         if (!ok)
             return (false, null, $"could not bring the base repo up to date ({error}) — refusing to start run without a current origin/{baseBranch}");
         var basePath = path!;
+
+        // A continued branch is the starting point, so it has to be there. Never
+        // fall back to creating it: the human asked to continue work that exists.
+        if (run.UseExistingBranch && run.BranchName is { } existing)
+        {
+            if (!await repoManager.RemoteBranchExistsInBaseRepoAsync(basePath, existing))
+                return (false, null,
+                    $"branch 'origin/{existing}' does not exist on the remote — "
+                    + "push it or clear 'use existing branch' on the work item, then re-run");
+            if (!await repoManager.ResetHardAsync(basePath, $"origin/{existing}", ctx.CancellationToken))
+                return (false, null, $"failed to reset base repo to origin/{existing}");
+            return (true, basePath, null);
+        }
 
         // A base the human typed can simply not be there. Say so once, plainly,
         // instead of letting it surface as a reset or rebase failure — and never

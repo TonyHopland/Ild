@@ -7,7 +7,9 @@ public record RemotePrResult(
     string? Url,
     string? HtmlUrl,
     RemotePrStatus Status,
-    string? Error
+    string? Error,
+    /// <summary>The branch the pull request targets, when the forge said; set on a lookup of an existing one.</summary>
+    string? TargetBranch = null
 );
 
 public enum RemotePrStatus

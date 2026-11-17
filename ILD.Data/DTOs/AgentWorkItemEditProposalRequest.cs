@@ -29,6 +29,11 @@ public class AgentWorkItemEditProposalRequest
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>
+    /// Null = not proposed.
+    /// </summary>
+    public bool? UseExistingBranch { get; set; }
+
     /// <summary>Ids of work items the item should start depending on.</summary>
     public List<string>? AddDependencies { get; set; }
 

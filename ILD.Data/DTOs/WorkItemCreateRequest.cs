@@ -46,4 +46,9 @@ public class WorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// When true, <see cref="BranchNameOverride"/> names a branch that already exists on origin and runs continue it instead of refusing the name as taken. Null leaves it unchanged on update.
+    /// </summary>
+    public bool? UseExistingBranch { get; set; }
 }

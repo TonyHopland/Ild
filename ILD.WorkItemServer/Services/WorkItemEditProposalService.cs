@@ -104,7 +104,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
 
         var item = await _db.WorkItems.AsNoTracking()
             .Where(w => w.InternalId == key.Value)
-            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride, w.DependenciesJson })
+            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride, w.UseExistingBranch, w.DependenciesJson })
             .SingleAsync(ct);
 
         var proposal = new WorkItemEditProposal
@@ -116,6 +116,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             ProposedTagsJson = req.Tags is null ? null : WorkItemMapper.SerializeTags(req.Tags),
             ProposedBranchNameOverride = req.BranchNameOverride?.Trim(),
             ProposedBaseBranchOverride = req.BaseBranchOverride?.Trim(),
+            ProposedUseExistingBranch = req.UseExistingBranch,
             ProposedAddDependenciesJson = req.AddDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.AddDependencies),
             ProposedRemoveDependenciesJson = req.RemoveDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.RemoveDependencies),
             SnapshotTitle = item.Title,
@@ -123,6 +124,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             SnapshotTagsJson = item.TagsJson,
             SnapshotBranchNameOverride = item.BranchNameOverride,
             SnapshotBaseBranchOverride = item.BaseBranchOverride,
+            SnapshotUseExistingBranch = item.UseExistingBranch,
             SnapshotDependenciesJson = req.AddDependencies is null && req.RemoveDependencies is null ? null : item.DependenciesJson,
             Rationale = string.IsNullOrWhiteSpace(req.Rationale) ? null : req.Rationale.Trim(),
             CreatedByLoopRunId = req.CreatedByLoopRunId,
@@ -143,9 +145,9 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     private static string? Validate(string workItemId, CreateEditProposalRequest req)
     {
         if (req.Title is null && req.Description is null && req.Tags is null
-            && req.BranchNameOverride is null && req.BaseBranchOverride is null
+            && req.BranchNameOverride is null && req.BaseBranchOverride is null && req.UseExistingBranch is null
             && req.AddDependencies is null && req.RemoveDependencies is null)
-            return "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies.";
+            return "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, useExistingBranch, addDependencies or removeDependencies.";
         if (req.AddDependencies is { Count: 0 } || req.RemoveDependencies is { Count: 0 })
             return "A dependency list, when given, must name at least one work item.";
         var dependencyIds = (req.AddDependencies ?? []).Concat(req.RemoveDependencies ?? []).ToList();
@@ -227,6 +229,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                 && w.TagsJson == proposal.SnapshotTagsJson
                 && w.BranchNameOverride == proposal.SnapshotBranchNameOverride
                 && w.BaseBranchOverride == proposal.SnapshotBaseBranchOverride
+                && w.UseExistingBranch == proposal.SnapshotUseExistingBranch
                 && (expectedDependencies == null || w.DependenciesJson == expectedDependencies))
             .ExecuteUpdateAsync(s =>
             {
@@ -240,6 +243,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                     s.SetProperty(w => w.BranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
                 if (proposal.ProposedBaseBranchOverride is { } baseBranch)
                     s.SetProperty(w => w.BaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
+                if (ProposedUseExistingBranch(proposal) is { } useExisting)
+                    s.SetProperty(w => w.UseExistingBranch, useExisting);
                 if (proposedDependencies is not null)
                     s.SetProperty(w => w.DependenciesJson, proposedDependencies);
                 s.SetProperty(w => w.UpdatedAt, now);
@@ -397,10 +402,22 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Compare(WorkItemHistoryFields.BranchNameOverride, proposal.SnapshotBranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
         if (proposal.ProposedBaseBranchOverride is { } baseBranch)
             Compare(WorkItemHistoryFields.BaseBranchOverride, proposal.SnapshotBaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
+        if (ProposedUseExistingBranch(proposal) is { } useExisting)
+            Compare(WorkItemHistoryFields.UseExistingBranch,
+                WorkItemHistoryFields.Encode(proposal.SnapshotUseExistingBranch), WorkItemHistoryFields.Encode(useExisting));
         if (proposedDependencies is not null)
             Compare(WorkItemHistoryFields.Dependencies, expectedDependencies, proposedDependencies);
         return changes;
     }
+
+    /// <summary>
+    /// What approving the proposal makes the item's flag, or null when it leaves it alone. The flag only means
+    /// something beside a branch name, so a proposal that clears the name clears the flag with it.
+    /// </summary>
+    private static bool? ProposedUseExistingBranch(WorkItemEditProposal proposal)
+        => proposal.ProposedBranchNameOverride is { } branch && WorkItemMapper.NormalizeBranchRef(branch) == null
+            ? false
+            : proposal.ProposedUseExistingBranch;
 
     private static IReadOnlyList<string> DeserializeIds(string? json)
         => json is null ? [] : WorkItemMapper.DeserializeDependencies(json);
@@ -440,6 +457,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = p.ProposedTagsJson is null ? null : WorkItemMapper.DeserializeTags(p.ProposedTagsJson),
             BranchNameOverride = p.ProposedBranchNameOverride,
             BaseBranchOverride = p.ProposedBaseBranchOverride,
+            UseExistingBranch = p.ProposedUseExistingBranch,
             AddDependencies = NamedDependencies(p.ProposedAddDependenciesJson, titles),
             RemoveDependencies = NamedDependencies(p.ProposedRemoveDependenciesJson, titles),
         },
@@ -450,6 +468,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = WorkItemMapper.DeserializeTags(p.SnapshotTagsJson),
             BranchNameOverride = p.SnapshotBranchNameOverride,
             BaseBranchOverride = p.SnapshotBaseBranchOverride,
+            UseExistingBranch = p.SnapshotUseExistingBranch,
             Dependencies = p.SnapshotDependenciesJson is null ? null : DeserializeIds(p.SnapshotDependenciesJson),
         },
         Rationale = p.Rationale,

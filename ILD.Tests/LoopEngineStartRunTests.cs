@@ -201,6 +201,61 @@ public class LoopEngineStartRunTests
     }
 
     [Fact]
+    public async Task StartRun_pins_use_existing_branch_on_the_run()
+    {
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView
+        {
+            Id = workItemId, Tags = new[] { "tag" }, BranchNameOverride = "Planning", UseExistingBranch = true,
+        };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.True(run.UseExistingBranch);
+        Assert.Equal("Planning", run.BranchName);
+    }
+
+    [Fact]
+    public async Task StartRun_does_not_pin_use_existing_branch_without_a_branch_name()
+    {
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, UseExistingBranch = true };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        Assert.False(db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId).UseExistingBranch);
+    }
+
+    [Fact]
+    public async Task StartRun_parks_without_a_run_when_the_existing_branch_is_not_on_origin()
+    {
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView
+        {
+            Id = workItemId, Tags = new[] { "tag" }, BranchNameOverride = "Planning", UseExistingBranch = true,
+        };
+        const string problem = "Branch `Planning` does not exist on origin — push it, or clear 'use existing branch' on this work item.";
+        var (engine, workItems) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi, existingVerdict: new BranchNameVerdict(null, problem));
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
+        workItems.Verify(w => w.ParkWithoutRunAsync(It.IsAny<WorkItemActor>(), workItemId, problem), Times.Once);
+    }
+
+    [Fact]
     public async Task StartRun_pins_the_base_branch_override_on_the_run()
     {
         using var db = new TestDb();
@@ -276,7 +331,8 @@ public class LoopEngineStartRunTests
         TestDb db, string workItemId, RecoveryPolicy templatePolicy, bool seedVersionAndStartNode,
         string? branchNameOverride = null,
         BranchNameVerdict? verdict = null,
-        WorkItemView? workItemView = null)
+        WorkItemView? workItemView = null,
+        BranchNameVerdict? existingVerdict = null)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = templatePolicy };
         db.Context.LoopTemplates.Add(template);
@@ -329,6 +385,8 @@ public class LoopEngineStartRunTests
         var branchNames = new Mock<IBranchNameOverrideService>();
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
+        branchNames.Setup(b => b.InspectExistingAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingVerdict ?? BranchNameVerdict.Usable);
         services.AddSingleton(branchNames.Object);
         var sp = services.BuildServiceProvider();
 

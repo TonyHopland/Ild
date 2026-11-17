@@ -159,6 +159,68 @@ public class BranchNameOverrideServiceTests : IDisposable
         Assert.True(verdict.IsUsable);
     }
 
+    [Fact]
+    public async Task An_existing_branch_on_origin_and_in_the_base_clone_is_usable_when_continuing_it()
+    {
+        var (svc, _, repoId, git) = Setup(baseRepoOnDisk: true);
+        git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+        git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "Planning", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+
+        var verdict = await svc.InspectExistingAsync("Planning", repoId, "WI-1", TestContext.Current.CancellationToken);
+
+        Assert.True(verdict.IsUsable);
+    }
+
+    [Fact]
+    public async Task The_same_branch_is_a_conflict_when_the_item_did_not_ask_to_continue_it()
+    {
+        var (svc, _, repoId, git) = Setup();
+        git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "Planning", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+
+        var verdict = await svc.InspectAsync("Planning", repoId, "WI-1", TestContext.Current.CancellationToken);
+
+        Assert.Contains("already exists on origin", verdict.Conflict);
+    }
+
+    [Fact]
+    public async Task A_branch_missing_from_origin_is_a_clear_conflict_when_continuing_it()
+    {
+        var (svc, _, repoId, git) = Setup();
+        git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "Planning", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(false);
+
+        var verdict = await svc.InspectExistingAsync("Planning", repoId, "WI-1", TestContext.Current.CancellationToken);
+
+        Assert.Null(verdict.ValidationError);
+        Assert.Contains("`Planning` does not exist on origin", verdict.Conflict);
+        Assert.Contains("use existing branch", verdict.Conflict);
+    }
+
+    [Fact]
+    public async Task An_unreachable_origin_is_not_a_conflict_when_continuing_a_branch()
+    {
+        var (svc, _, repoId, git) = Setup();
+        git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync((bool?)null);
+
+        var verdict = await svc.InspectExistingAsync("Planning", repoId, "WI-1", TestContext.Current.CancellationToken);
+
+        Assert.True(verdict.IsUsable);
+    }
+
+    [Fact]
+    public async Task A_run_holding_the_branch_still_conflicts_when_continuing_it()
+    {
+        var (svc, db, repoId, _) = Setup();
+        var run = SeedRun(db, "WI-9", "Planning", LoopRunStatus.Running);
+
+        var verdict = await svc.InspectExistingAsync("Planning", repoId, "WI-1", TestContext.Current.CancellationToken);
+
+        Assert.Contains(run.Id.ToString(), verdict.Conflict);
+    }
+
     private static LoopRun SeedRun(TestDb db, string workItemId, string branchName, LoopRunStatus status)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };

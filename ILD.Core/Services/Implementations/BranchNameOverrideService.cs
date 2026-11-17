@@ -29,11 +29,26 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         _log = log;
     }
 
-    public async Task<BranchNameVerdict> InspectAsync(
+    public Task<BranchNameVerdict> InspectAsync(
         string? branchName,
         Guid? repositoryId,
         string? workItemId,
         CancellationToken cancellationToken = default)
+        => InspectAsync(branchName, repositoryId, workItemId, useExisting: false, cancellationToken);
+
+    public Task<BranchNameVerdict> InspectExistingAsync(
+        string? branchName,
+        Guid? repositoryId,
+        string? workItemId,
+        CancellationToken cancellationToken = default)
+        => InspectAsync(branchName, repositoryId, workItemId, useExisting: true, cancellationToken);
+
+    private async Task<BranchNameVerdict> InspectAsync(
+        string? branchName,
+        Guid? repositoryId,
+        string? workItemId,
+        bool useExisting,
+        CancellationToken cancellationToken)
     {
         var name = BranchNameRules.Normalize(branchName);
         if (name is null)
@@ -78,14 +93,20 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         // The base clone may not be on disk yet (the Start node clones on
         // demand), in which case there are no local branches to collide with.
         var basePath = BaseRepoPath.Existing(repo, _config);
-        if (basePath is not null && await _git.LocalBranchExistsAsync(basePath, name))
+        if (!useExisting && basePath is not null && await _git.LocalBranchExistsAsync(basePath, name))
             return Conflict(
                 $"Branch `{name}` already exists locally in the repository. " +
                 "Delete it, or give this work item a different branch name.");
 
         var auth = await ResolveAuthAsync(repo);
         var onOrigin = await _git.RemoteHasBranchAsync(repo.CloneUrl, name, cancellationToken, auth);
-        if (onOrigin == true)
+        if (useExisting)
+        {
+            if (onOrigin == false)
+                return Conflict(
+                    $"Branch `{name}` does not exist on origin — push it, or clear 'use existing branch' on this work item.");
+        }
+        else if (onOrigin == true)
             return Conflict(
                 $"Branch `{name}` already exists on origin. " +
                 "ILD never deletes remote branches — remove it yourself, or give this work item a different branch name.");

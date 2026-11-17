@@ -106,6 +106,9 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("UseExistingBranch")
+                        .HasColumnType("boolean");
+
                     b.HasKey("InternalId");
 
                     b.HasIndex("Id")
@@ -206,6 +209,9 @@ namespace ILD.WorkItemServer.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
+                    b.Property<bool?>("ProposedUseExistingBranch")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Rationale")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
@@ -236,6 +242,9 @@ namespace ILD.WorkItemServer.Migrations
                         .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
+
+                    b.Property<bool>("SnapshotUseExistingBranch")
+                        .HasColumnType("boolean");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");

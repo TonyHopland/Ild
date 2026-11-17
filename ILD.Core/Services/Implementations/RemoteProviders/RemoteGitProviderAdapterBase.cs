@@ -81,6 +81,49 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             null);
     }
 
+    public virtual async Task<RemotePrResult?> FindOpenPullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        // GitHub narrows by `head=owner:branch`; Gitea-family forges ignore it, so the head is checked on what
+        // comes back either way, and the open pull requests are read page by page until the branch turns up.
+        for (var page = 1; page <= MaxOpenPullRequestPages; page++)
+        {
+            using var resp = await http.GetAsync(
+                $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls?state=open&per_page={OpenPullRequestPageSize}"
+                + $"&limit={OpenPullRequestPageSize}&page={page}&head={Uri.EscapeDataString($"{repo.Owner}:{sourceBranch}")}");
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+            foreach (var pr in doc.RootElement.EnumerateArray())
+            {
+                if (!pr.TryGetProperty("head", out var head)
+                    || !head.TryGetProperty("ref", out var headRef)
+                    || headRef.GetString() != sourceBranch
+                    || !pr.TryGetProperty("url", out var url))
+                    continue;
+                return new RemotePrResult(
+                    url.GetString(),
+                    pr.TryGetProperty("html_url", out var htmlUrl) ? htmlUrl.GetString() : null,
+                    RemotePrStatus.Open,
+                    null,
+                    pr.TryGetProperty("base", out var target) && target.TryGetProperty("ref", out var targetRef)
+                        ? targetRef.GetString()
+                        : null);
+            }
+
+            if (doc.RootElement.GetArrayLength() < OpenPullRequestPageSize)
+                break;
+        }
+        return null;
+    }
+
+    private const int OpenPullRequestPageSize = 50;
+    private const int MaxOpenPullRequestPages = 20;
+
     /// <summary>
     /// "HTTP {code}", plus the forge's message and <c>Retry-After</c> for 429 and
     /// 403: those are the answers that can be rate limits, and a rate limit is

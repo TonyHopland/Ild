@@ -219,7 +219,7 @@ public class AgentController : ControllerBase, IActionFilter
             requestFields = new
             {
                 createWorkItem = "POST workitems: title (required, 1-512 chars), description, repositoryId (required; from GET repositories), tags (a list of strings; the tags pick the loop template that runs the item), dependencies (work item ids), branchNameOverride, baseBranchOverride, loopTemplateId, createdByLoopRunId (ignored for a grant).",
-                updateWorkItem = "PUT workitems/{id}: title, description, tags (replaces the list; picks the loop template), branchNameOverride, baseBranchOverride.",
+                updateWorkItem = "PUT workitems/{id}: title, description, tags (replaces the list; picks the loop template), branchNameOverride, baseBranchOverride, useExistingBranch.",
                 reorderWorkItem = "POST workitems/{id}/reorder: aboveId and/or belowId (at least one: the id of the work item this one goes directly after / directly before). With aboveId the item lands directly after that card in the whole board order, otherwise directly before belowId. The item keeps its status; a request that would change it is refused.",
                 humanFeedback = "runId (required: the run the item is parked on), input (optional text, at most 8192 chars), name (the output name, /edge only).",
             },
@@ -407,6 +407,7 @@ public class AgentController : ControllerBase, IActionFilter
             // holds is what the item's next run will check out.
             branchNameOverride = wi.BranchNameOverride,
             baseBranchOverride = wi.BaseBranchOverride,
+            useExistingBranch = wi.UseExistingBranch,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -1644,7 +1645,7 @@ public class AgentController : ControllerBase, IActionFilter
         // A custom branch name is used verbatim as a branch and a worktree
         // directory, so an illegal one is refused rather than mangled. The base
         // branch is a ref too; whether it exists on origin is settled at run start.
-        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride) is { } branchError)
+        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch) is { } branchError)
             return BadRequest(new { error = branchError });
         var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
         var baseBranchOverride = BranchNameRules.Normalize(request.BaseBranchOverride);
@@ -1695,7 +1696,8 @@ public class AgentController : ControllerBase, IActionFilter
                 createdByChatSessionId: createdByChatSessionId,
                 createdByExternalGrantId: createdByExternalGrantId,
                 branchNameOverride: branchNameOverride,
-                baseBranchOverride: baseBranchOverride);
+                baseBranchOverride: baseBranchOverride,
+                useExistingBranch: request.UseExistingBranch == true);
         }
         catch (InvalidOperationException ex)
         {
@@ -1730,7 +1732,8 @@ public class AgentController : ControllerBase, IActionFilter
         if (!_sessions.Owns(Caller, wi))
             return StatusCode(403, new { error = "You can only edit work items your own session created. To suggest an edit to this one, use propose_workitem_edit: a human approves or rejects it." });
 
-        if (BranchNameRules.ValidateOverrides(request.BranchNameOverride, request.BaseBranchOverride) is { } branchError)
+        if (BranchNameRules.ValidateOverrides(
+                request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch, wi.BranchNameOverride) is { } branchError)
             return BadRequest(new { error = branchError });
 
         if (await _sessions.ActorAsync(Caller) is not { } actor)
@@ -1738,7 +1741,8 @@ public class AgentController : ControllerBase, IActionFilter
         var ok = await _workItems.UpdateAsync(
             actor, id, request.Title, request.Description ?? string.Empty, request.Tags,
             branchNameOverride: request.BranchNameOverride,
-            baseBranchOverride: request.BaseBranchOverride);
+            baseBranchOverride: request.BaseBranchOverride,
+            useExistingBranch: request.UseExistingBranch);
         if (!ok)
             return StatusCode(503, new { error = "Work item update failed." });
 
@@ -1751,6 +1755,7 @@ public class AgentController : ControllerBase, IActionFilter
             status = updated?.Status.ToString(),
             branchNameOverride = updated?.BranchNameOverride,
             baseBranchOverride = updated?.BaseBranchOverride,
+            useExistingBranch = updated?.UseExistingBranch,
         });
     }
 

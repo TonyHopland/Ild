@@ -293,6 +293,109 @@ public sealed class RepositoryManagerTests : IDisposable
         return (origin, wt, mgr);
     }
 
+    /// <summary>
+    /// The Start node's steps for a run on an existing branch, against real git: a bare origin with a
+    /// <c>Planning</c> branch, a base clone holding a stale local <c>Planning</c>, then fetch, reset the base to
+    /// origin/Planning, drop the stale branch, and cut the worktree from what is left at HEAD.
+    /// </summary>
+    private async Task<(string Work, string Bare, RepositoryManager Mgr, string Worktree, GitAuthOptions Auth, string OriginTip)> ContinuedBranchAsync()
+    {
+        var work = Path.Combine(_tmp, "ec-work");
+        var bare = Path.Combine(_tmp, "ec-origin.git");
+        var target = Path.Combine(_tmp, "ec-base");
+        Directory.CreateDirectory(work);
+        Git(work, "init", "-b", "main");
+        Git(work, "config", "user.email", "t@t.io");
+        Git(work, "config", "user.name", "Tester");
+        File.WriteAllText(Path.Combine(work, "a.txt"), "a\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "seed");
+        Git(work, "checkout", "-b", "Planning");
+        File.WriteAllText(Path.Combine(work, "plan.txt"), "first\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "planning one");
+        Git(work, "checkout", "main");
+        Git(_tmp, "clone", "--bare", work, bare);
+
+        var mgr = NewManager(Path.Combine(_tmp, "ec-wt"));
+        var auth = new GitAuthOptions(bare, null);
+        var (cloned, cloneError) = await mgr.CloneAsync(bare, target, TestContext.Current.CancellationToken, auth);
+        Assert.True(cloned, cloneError);
+
+        // A local Planning left behind at an old commit, and the branch moving on at origin since.
+        Git(target, "branch", "Planning", "main");
+        Git(work, "checkout", "Planning");
+        File.WriteAllText(Path.Combine(work, "plan.txt"), "second\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "planning two");
+        Git(work, "push", bare, "Planning");
+        var originTip = GitOut(work, "rev-parse", "HEAD");
+
+        Assert.True(await mgr.FetchAsync(target, TestContext.Current.CancellationToken, auth));
+        Assert.True(await mgr.RemoteBranchExistsInBaseRepoAsync(target, "Planning"));
+        Assert.True(await mgr.ResetHardAsync(target, "origin/Planning", TestContext.Current.CancellationToken));
+        Assert.True(await mgr.LocalBranchExistsAsync(target, "Planning"));
+        Assert.True(await mgr.DeleteLocalBranchAsync(target, "Planning"));
+        var wt = await mgr.CreateWorktreeAsync(target, "Planning");
+        return (work, bare, mgr, wt, auth, originTip);
+    }
+
+    [Fact]
+    public async Task A_run_continuing_an_existing_branch_gets_a_worktree_at_the_origin_tip_replacing_a_stale_local_branch()
+    {
+        var (_, _, mgr, wt, _, originTip) = await ContinuedBranchAsync();
+
+        Assert.Equal(originTip, await mgr.GetHeadCommitAsync(wt));
+        Assert.Equal("second\n", File.ReadAllText(Path.Combine(wt, "plan.txt")));
+        Assert.Equal("Planning", GitOut(wt, "rev-parse", "--abbrev-ref", "HEAD"));
+        Assert.Equal(0, await mgr.GetCommitsAheadCountAsync(wt, "origin/Planning"));
+    }
+
+    [Fact]
+    public async Task A_continued_branch_is_pushed_fast_forward_and_origin_gets_the_runs_commit()
+    {
+        var (_, bare, mgr, wt, auth, originTip) = await ContinuedBranchAsync();
+        File.WriteAllText(Path.Combine(wt, "run.txt"), "the run's work\n");
+        Git(wt, "config", "user.email", "t@t.io");
+        Git(wt, "config", "user.name", "Tester");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "run work");
+        var runTip = GitOut(wt, "rev-parse", "HEAD");
+
+        var (ok, error) = await mgr.PushAsync(wt, "Planning", TestContext.Current.CancellationToken, auth);
+
+        Assert.True(ok, error);
+        Assert.Equal(runTip, GitOut(bare, "rev-parse", "Planning"));
+        // Built on the commit that was there: what origin had is still its ancestor.
+        Git(bare, "merge-base", "--is-ancestor", originTip, runTip);
+    }
+
+    [Fact]
+    public async Task A_continued_branch_that_moved_on_at_origin_is_refused_never_forced()
+    {
+        var (work, bare, mgr, wt, auth, _) = await ContinuedBranchAsync();
+        File.WriteAllText(Path.Combine(wt, "run.txt"), "the run's work\n");
+        Git(wt, "config", "user.email", "t@t.io");
+        Git(wt, "config", "user.name", "Tester");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "run work");
+        // Somebody else pushes to the branch while the run works: its history now diverges from the run's.
+        File.WriteAllText(Path.Combine(work, "other.txt"), "somebody else's\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "elsewhere");
+        Git(work, "push", bare, "Planning");
+        var theirs = GitOut(bare, "rev-parse", "Planning");
+
+        var (ok, error) = await mgr.PushAsync(wt, "Planning", TestContext.Current.CancellationToken, auth);
+
+        Assert.False(ok);
+        Assert.False(string.IsNullOrWhiteSpace(error));
+        Assert.Equal(theirs, GitOut(bare, "rev-parse", "Planning"));
+        var pushes = LastRunner.Calls.Where(c => c.Args.Contains("push")).ToList();
+        Assert.NotEmpty(pushes);
+        Assert.DoesNotContain(pushes, c => c.Args.Any(a => a == "--force" || a == "-f" || a.StartsWith('+') || a.StartsWith("--force-with-lease")));
+    }
+
     [Fact]
     public async Task CloneAsync_authenticates_only_the_orchestrators_mirror_operations()
     {

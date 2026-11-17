@@ -56,6 +56,21 @@ describe("EditProposalCard", () => {
     expect(text).not.toContain("feature/untouched-branch");
   });
 
+  test("shows a proposed switch to continuing an existing branch", () => {
+    const { container } = render(
+      <EditProposalCard
+        proposal={makeProposal({
+          proposed: { useExistingBranch: true },
+          snapshot: { ...makeProposal().snapshot, useExistingBranch: false },
+        })}
+        onSettled={vi.fn()}
+      />,
+    );
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toMatch(/Continue existing branch ?no ?→ ?yes/);
+  });
+
   test("shows each dependency change as a line naming the item, and no title it does not know", () => {
     const { container } = render(
       <EditProposalCard

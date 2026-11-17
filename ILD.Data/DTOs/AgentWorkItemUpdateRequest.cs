@@ -39,4 +39,9 @@ public class AgentWorkItemUpdateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Omit (null) to leave unchanged. True makes the item continue the existing origin branch named by its branch name; false goes back to a fresh branch. Only the next run sees the change.
+    /// </summary>
+    public bool? UseExistingBranch { get; set; }
 }

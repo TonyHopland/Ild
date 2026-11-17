@@ -58,4 +58,9 @@ public class AgentWorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// When true, <see cref="BranchNameOverride"/> (required) names a branch that already exists on origin: runs check it out, commit on top of it and push to it (fast-forward only), instead of refusing the name as taken.
+    /// </summary>
+    public bool? UseExistingBranch { get; set; }
 }

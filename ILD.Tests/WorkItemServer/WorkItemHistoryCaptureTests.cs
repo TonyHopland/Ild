@@ -29,6 +29,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
     {
         "title", "description", "status", "tags", "dependencies", "repository",
         "aiProviderOverride", "aiProviderOverrideId", "branchNameOverride", "baseBranchOverride",
+        "useExistingBranch",
     };
 
     private static readonly WorkItemActor Alice = new("alice", WorkItemActorKind.Human, null, null);
@@ -154,6 +155,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
             Dependencies = new[] { dep.Id },
             RepositoryId = repository,
             BranchNameOverride = "feature/login",
+            UseExistingBranch = true,
         }, Ct);
 
         var rows = await RowsAsync(dto.Id);
@@ -170,6 +172,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         Assert.Null(ValueOf(rows, "aiProviderOverrideId"));
         Assert.Equal("feature/login", ValueOf(rows, "branchNameOverride"));
         Assert.Null(ValueOf(rows, "baseBranchOverride"));
+        Assert.Equal("true", ValueOf(rows, "useExistingBranch"));
     }
 
     // ── Changed, through the change tracker ────────────────────────────────

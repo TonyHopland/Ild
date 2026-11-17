@@ -113,6 +113,9 @@ public sealed class RemoteWorkItem
     /// </summary>
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>The item's runs continue the existing origin branch named by <see cref="BranchNameOverride"/>.</summary>
+    public bool UseExistingBranch { get; set; }
+
     /// <summary>How many edit proposals on this item still wait for a human. Zero on a poll.</summary>
     public int PendingEditProposalCount { get; set; }
 }
@@ -135,6 +138,9 @@ public sealed class RemoteCreateWorkItemRequest
 
     /// <summary>Ref the new item's runs branch from; blank/null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>The new item's runs continue the existing origin branch named by <see cref="BranchNameOverride"/>.</summary>
+    public bool UseExistingBranch { get; set; }
 }
 
 public sealed class RemoteUpdateWorkItemRequest
@@ -157,6 +163,9 @@ public sealed class RemoteUpdateWorkItemRequest
     /// null-unchanged / blank-clears convention as <see cref="BranchNameOverride"/>.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Replaces the use-existing-branch flag; null leaves it untouched.</summary>
+    public bool? UseExistingBranch { get; set; }
 
     /// <summary>Replaces the repository the item's next run works in; null leaves it untouched.</summary>
     public Guid? RepositoryId { get; set; }
@@ -282,6 +291,9 @@ public sealed class RemoteEditProposalFields
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>Proposed side: null = not proposed.</summary>
+    public bool? UseExistingBranch { get; set; }
+
     /// <summary>Proposed side only.</summary>
     public IReadOnlyList<RemoteEditProposalDependency>? AddDependencies { get; set; }
 
@@ -340,6 +352,7 @@ public sealed class RemoteCreateEditProposalRequest
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+    public bool? UseExistingBranch { get; set; }
     public IReadOnlyList<string>? AddDependencies { get; set; }
     public IReadOnlyList<string>? RemoveDependencies { get; set; }
     public string? Rationale { get; set; }

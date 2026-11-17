@@ -137,6 +137,22 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
             </dd>
           </>
         )}
+        {proposed.useExistingBranch != null && (
+          <>
+            <dt>Continue existing branch</dt>
+            <dd>
+              <div className="edit-proposal-values">
+                <span className="edit-proposal-old">
+                  {snapshot.useExistingBranch ? "yes" : "no"}
+                </span>
+                <span aria-hidden="true">→</span>
+                <span className="edit-proposal-new">
+                  {proposed.useExistingBranch ? "yes" : "no"}
+                </span>
+              </div>
+            </dd>
+          </>
+        )}
         {(addedDependencies.length > 0 || removedDependencies.length > 0) && (
           <>
             <dt>Dependencies</dt>

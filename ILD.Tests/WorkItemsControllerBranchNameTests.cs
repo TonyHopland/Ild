@@ -73,6 +73,61 @@ public class WorkItemsControllerBranchNameTests
     }
 
     [Fact]
+    public async Task Create_persists_use_existing_branch_with_a_branch_name()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+        var request = Request("branch", repoId, "Planning");
+        request.UseExistingBranch = true;
+
+        var result = await controller.Create(request);
+
+        var id = Assert.IsType<WorkItemView>(Assert.IsType<CreatedAtActionResult>(result).Value).Id;
+        var stored = (await mgr.GetWorkItemAsync(id))!;
+        Assert.Equal("Planning", stored.BranchNameOverride);
+        Assert.True(stored.UseExistingBranch);
+    }
+
+    [Fact]
+    public async Task Create_rejects_use_existing_branch_without_a_branch_name()
+    {
+        var (controller, _, db, repoId) = Setup();
+        using var _db = db;
+        var request = Request("base", repoId, "release/1.0");
+        request.UseExistingBranch = true;
+
+        var bad = Assert.IsType<BadRequestObjectResult>(await controller.Create(request));
+
+        Assert.Contains("useExistingBranch needs a branchNameOverride", Read(bad.Value!, "error"));
+    }
+
+    [Fact]
+    public async Task Update_accepts_use_existing_branch_when_the_item_already_has_a_branch_name()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, branchNameOverride: "Planning");
+
+        var result = await controller.Update(id, new WorkItemCreateRequest { Title = "t", UseExistingBranch = true });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.True((await mgr.GetWorkItemAsync(id))!.UseExistingBranch);
+    }
+
+    [Fact]
+    public async Task Update_rejects_use_existing_branch_when_there_is_no_branch_name_at_all()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
+
+        var result = await controller.Update(id, new WorkItemCreateRequest { Title = "t", UseExistingBranch = true });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.False((await mgr.GetWorkItemAsync(id))!.UseExistingBranch);
+    }
+
+    [Fact]
     public async Task Create_keeps_the_ai_provider_override_it_is_sent()
     {
         var (controller, mgr, db, repoId) = Setup();
@@ -132,7 +187,7 @@ public class WorkItemsControllerBranchNameTests
         using var _db = db;
 
         var result = Assert.IsType<OkObjectResult>(
-            await controller.CheckBranchName("feature/foo", repoId.ToString(), null, CancellationToken.None));
+            await controller.CheckBranchName("feature/foo", repoId.ToString(), null, false, CancellationToken.None));
         var payload = result.Value!;
         Assert.Null(Read(payload, "error"));
         Assert.Contains("already exists on origin", Read(payload, "warning"));

@@ -249,18 +249,16 @@ public class WorkItemsController : ControllerBase
         var repositoryId = (Guid?)rGuid;
 
         // A custom branch name is used verbatim as a branch and a worktree
-        // directory, so an illegal one is refused rather than mangled.
-        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
-        if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
+        // directory, so an illegal one is refused rather than mangled. The base
+        // branch reaches git as a ref too, so the same rules apply; whether it
+        // actually exists is not settled here — it is checked against origin when
+        // the run starts, which is the only moment that binds. Continuing an
+        // existing branch needs a name to continue.
+        if (BranchNameRules.ValidateOverrides(
+                request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch) is { } branchError)
             return BadRequest(new { error = branchError });
-
-        // The base branch reaches git as a ref too, so the same rules apply.
-        // Whether it actually exists is not settled here — it is checked against
-        // origin when the run starts, which is the only moment that binds.
+        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
         var baseBranchOverride = BranchNameRules.Normalize(request.BaseBranchOverride);
-        if (baseBranchOverride is not null
-            && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
-            return BadRequest(new { error = baseError });
 
         var id = await _workItemManager.CreateWorkItemAsync(
             user, request.Title, request.Description,
@@ -269,7 +267,8 @@ public class WorkItemsController : ControllerBase
             forceBacklog: false,
             tags: request.Tags,
             branchNameOverride: branchNameOverride,
-            baseBranchOverride: baseBranchOverride);
+            baseBranchOverride: baseBranchOverride,
+            useExistingBranch: request.UseExistingBranch == true);
 
         if (Enum.TryParse<RemoteAiProviderOverrideMode>(request.AiProviderOverride, ignoreCase: true, out var overrideMode)
             && overrideMode != RemoteAiProviderOverrideMode.None)
@@ -304,19 +303,14 @@ public class WorkItemsController : ControllerBase
                 overrideProviderId = parsedProviderId;
         }
 
-        // Same rule as create, and the same reason it must be enforced here:
+        // Same rules as create, and the same reason they must be enforced here:
         // editing the branch name is how a human clears a conflict, so the edit
-        // path is a first-class way to introduce an illegal one. A blank value
-        // is a deliberate "go back to generated naming" and passes through.
-        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
-            && BranchNameRules.Validate(branchName) is { } branchError)
+        // path is a first-class way to introduce an illegal one. A blank name or
+        // base is a deliberate "go back to the default" and passes through; a
+        // flag to continue an existing branch needs a name, sent or already held.
+        if (await BranchNameRules.ValidateEditAsync(
+                _workItemManager, id, request.BranchNameOverride, request.BaseBranchOverride, request.UseExistingBranch) is { } branchError)
             return BadRequest(new { error = branchError });
-
-        // Likewise for the base branch: a blank value is a deliberate "go back
-        // to the repository default" and passes through untouched.
-        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
-            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
-            return BadRequest(new { error = baseError });
 
         // A blank repository leaves the stored one alone, so agent edits and
         // older clients that never send it keep working. The WorkItemServer has
@@ -332,7 +326,7 @@ public class WorkItemsController : ControllerBase
 
         var ok = await _workItemManager.UpdateAsync(
             user, id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
-            request.BranchNameOverride, request.BaseBranchOverride, repositoryId);
+            request.BranchNameOverride, request.BaseBranchOverride, repositoryId, request.UseExistingBranch);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
@@ -377,13 +371,14 @@ public class WorkItemsController : ControllerBase
         [FromQuery] string? name,
         [FromQuery] string? repositoryId,
         [FromQuery] string? workItemId,
+        [FromQuery] bool useExistingBranch,
         CancellationToken cancellationToken)
     {
         if (BranchNameRules.Normalize(name) is null)
             return Ok(new { error = (string?)null, warning = (string?)null });
 
         Guid? repoId = Guid.TryParse(repositoryId, out var parsed) ? parsed : null;
-        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken);
+        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, useExistingBranch, cancellationToken);
         return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict });
     }
 
