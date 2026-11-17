@@ -277,8 +277,7 @@ describe("useWorkItemDetail preview live update", () => {
     vi.spyOn(workItemService, "startPreview").mockRejectedValue(new Error("refused"));
 
     const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
-    const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -334,9 +333,7 @@ describe("useWorkItemDetail run cleanup", () => {
     );
     const getById = vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
 
-    const wi = makeWorkItem();
-    const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), vi.fn()), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -362,8 +359,7 @@ describe("the queued pull-request writes a round intends to send", () => {
       .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
 
     const wi = makeWorkItem({ status: WorkItemStatus.Running, humanFeedbackReason: null });
-    const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {
@@ -420,8 +416,7 @@ describe("the queued pull-request writes a round intends to send", () => {
     vi.spyOn(loopRunService, "getById").mockRejectedValue(new Error("network"));
 
     const wi = makeWorkItem();
-    const onSave = vi.fn();
-    const { result } = renderHook(() => useWorkItemDetail(wi, onSave), {
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()), {
       wrapper: WorkItemHubProvider,
     });
     await act(async () => {

@@ -48,7 +48,6 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
     public bool RawEventsExplainFailure { get; set; }
     public string? PrepareFailure { get; set; }
     public Exception? ParseThrows { get; set; }
-    public Action? OnParse { get; set; }
     public ScriptedTurn? Turn { get; private set; }
 
     /// <summary>What the turn makes of its standard output; by default all of it is the answer, as plain output.</summary>
@@ -171,7 +170,6 @@ internal sealed class ScriptedAdapter(IServiceScopeFactory scopes, CountingGatew
         public override StreamResult ParseStream()
         {
             Step("parse");
-            adapter.OnParse?.Invoke();
             if (adapter.ParseThrows is { } failure) throw failure;
             return adapter.ReadAs(_stdout);
         }
