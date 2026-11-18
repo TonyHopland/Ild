@@ -218,6 +218,25 @@ public class LoopEngineFailedNodeParkTests
         VerifyItemMovedTo(h, RemoteWorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
     }
 
+    [Fact]
+    public async Task Parking_a_run_whose_pod_is_gone_never_checkpoints_into_that_pod()
+    {
+        var host = new Mock<IRunLifecycle>();
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(host.Object));
+        h.AddNode("a", NodeType.AI, "Agent");
+        var blocking = new BlockingExecutor(NodeType.AI);
+        h.Registry.Register(blocking);
+        h.SeedRun("a");
+        await h.LaunchAsync();
+        await blocking.Entered;
+
+        await h.Engine.ParkRunOnLostPodAsync(h.RunId, new RunTermination(RunTerminationKind.PodLost));
+        await h.WaitUntilIdleAsync();
+
+        host.Verify(m => m.CheckpointAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(LoopRunNodeStatus.Failed, Assert.Single(h.ReloadRunNodes()).Status);
+    }
+
     private const string PreviewConflict =
         "A preview is already running for work item 398 (Other). Stop it before starting this one.";
 

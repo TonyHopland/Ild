@@ -1784,6 +1784,7 @@ public sealed partial class LoopEngine : ILoopEngine
     /// </summary>
     private async Task CheckpointRunAsync(IServiceProvider sp, Guid runId, Guid? nodeId = null, Guid? runNodeId = null)
     {
+        if (_podLost.ContainsKey(runId)) return;
         if (sp.GetService<IRunLifecycle>() is not { } host) return;
         using var limit = new CancellationTokenSource(CheckpointTimeout);
         bool? kept = null;
@@ -1800,7 +1801,23 @@ public sealed partial class LoopEngine : ILoopEngine
     private static bool IsAlive(LoopRunStatus status)
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 
+    // Runs being parked because their pod is gone: the loop they unwind through must not exec into that pod (a checkpoint would make it again).
+    private readonly ConcurrentDictionary<Guid, byte> _podLost = new();
+
     public async Task ParkRunOnLostPodAsync(Guid runId, RunTermination ended)
+    {
+        _podLost[runId] = 0;
+        try
+        {
+            await ParkLostPodCoreAsync(runId, ended);
+        }
+        finally
+        {
+            _podLost.TryRemove(runId, out _);
+        }
+    }
+
+    private async Task ParkLostPodCoreAsync(Guid runId, RunTermination ended)
     {
         var reason = ended.Describe() + " " + RunTermination.LostText("pod");
         Guid? nodeId;
