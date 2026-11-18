@@ -132,7 +132,27 @@ public sealed partial class WorktreeInspector : IWorktreeInspector
         });
     }
 
+    // A run whose pod is gone fails every read through it alike: said once, with the way on, instead of as a failed git command.
     private async Task<WorktreeReadResult> WithWorktreeAsync(string workItemId, Func<Target, Task<WorktreeReadResult>> read)
+    {
+        try
+        {
+            return await ReadInWorktreeAsync(workItemId, read);
+        }
+        catch (Exception ex) when (FindPodLost(ex) is { } lost)
+        {
+            return new WorktreeReadResult(WorktreeReadOutcome.NoWorktree, lost.Message);
+        }
+    }
+
+    private static RunPodLostException? FindPodLost(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is RunPodLostException lost) return lost;
+        return null;
+    }
+
+    private async Task<WorktreeReadResult> ReadInWorktreeAsync(string workItemId, Func<Target, Task<WorktreeReadResult>> read)
     {
         var workItem = await _workItems.GetWorkItemAsync(workItemId);
         if (workItem is null)

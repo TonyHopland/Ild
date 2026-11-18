@@ -1,3 +1,4 @@
+using ILD.Api.Middleware;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -17,6 +18,8 @@ public enum PreviewRefusal
     Refused,
     /// <summary>The service has no preview config: 404 with an error message.</summary>
     ConfigNotFound,
+    /// <summary>The run's pod or container is gone (<see cref="ILD.Core.Services.RunHosts.RunPodLostException"/>): 409 with the way on.</summary>
+    PodLost,
 }
 
 /// <summary>
@@ -53,6 +56,7 @@ public sealed class PreviewResult<T>
         null => new OkObjectResult(_value),
         PreviewRefusal.WorkItemNotFound => new NotFoundResult(),
         PreviewRefusal.ConfigNotFound => new NotFoundObjectResult(new { error = Message }),
+        PreviewRefusal.PodLost => new ConflictObjectResult(new { error = Message, code = "run-pod-lost" }),
         _ => new BadRequestObjectResult(new { error = Message }),
     };
 }
@@ -182,6 +186,10 @@ public sealed class WorkItemPreview(
         try
         {
             return await call(item);
+        }
+        catch (Exception ex) when (RunPodLostMiddleware.PodLostIn(ex) is { } lost)
+        {
+            return PreviewResult<T>.Failed(PreviewRefusal.PodLost, lost.Message);
         }
         catch (InvalidOperationException ex)
         {
