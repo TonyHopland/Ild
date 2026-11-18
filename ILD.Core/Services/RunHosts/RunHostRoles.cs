@@ -36,10 +36,13 @@ public interface IRunLifecycle : IRunHostIdentity
 
     /// <summary>
     /// Keep the run's worktree somewhere that outlives its pod or container (a commit of everything git does not ignore, as a hidden ref in the base
-    /// repository, never a branch on the remote), so a run whose pod is lost is made again with its work. Best effort: false when it could not be kept
-    /// or the host has no pod to lose.
+    /// repository, never a branch on the remote), so a run whose pod is lost is made again with its work. Best effort: false when it could not be kept, null
+    /// when the host has no pod to lose or keeps no record to make one from.
     /// </summary>
-    Task<bool> CheckpointAsync(Guid runId, CancellationToken ct = default) => Task.FromResult(false);
+    Task<bool?> CheckpointAsync(Guid runId, CancellationToken ct = default) => Task.FromResult<bool?>(null);
+
+    /// <summary>What was and was not recovered when the host made the run's lost pod or container again since this was last asked; null when it did not. Taken once.</summary>
+    string? TakeRecoveryNote(Guid runId) => null;
 }
 
 /// <summary>Which run or chat a path or a call belongs to, answered here once, by RunHolders; callers ask the host and never read a path themselves. The defaults are the path format alone (ADR-0032, ADR-0034); only a host that routes by it answers otherwise.</summary>

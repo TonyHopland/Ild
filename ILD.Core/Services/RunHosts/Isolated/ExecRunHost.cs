@@ -884,13 +884,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>
     /// What a run's worktree is kept as outside its pod: the checkpoint is read out of the pod and put in ILD's base repository. Best effort and
-    /// never throws: false when the host cannot say where the base repository is, the pod cannot be reached, or git refuses.
+    /// never throws: null when the host keeps no record of where the base repository is, false when the pod cannot be reached or git refuses.
     /// </summary>
-    public async Task<bool> CheckpointAsync(Guid run, CancellationToken ct = default)
+    public async Task<bool?> CheckpointAsync(Guid run, CancellationToken ct = default)
     {
         try
         {
-            if (await ReadRunRequestAsync(run, ct) is not { } request) return false;
+            if (await ReadRunRequestAsync(run, ct) is not { } request) return null;
             using var bundleFile = PrivateTempFile.Create("ild-checkpoint-");
             await using (var sink = bundleFile.OpenWrite())
             {
@@ -951,6 +951,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         Fresh,
     }
 
+    // What a run that was made again was told, for the loop to put on the run's events.
+    private readonly ConcurrentDictionary<Guid, string> _recoveryNotes = new();
+
+    public string? TakeRecoveryNote(Guid runId) => _recoveryNotes.TryRemove(runId, out var note) ? note : null;
+
     /// <summary>
     /// Makes the pod or container of a run again from the request it was made from, and says in the log what of the run's work came back.
     /// False when there is no request to make it from.
@@ -961,12 +966,15 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         // As the start of a run does: the base repository is held while its branches are bundled into the new checkout.
         using var _ = await BaseRepoClone.LockAsync(request.RepositoryId, ct);
         var (_, checkout) = await CreateCoreAsync(request, ct);
-        Logger?.LogWarning("The {Noun} of run {Run} no longer existed and was made again: {Recovered}", Noun, run, checkout switch
+        var recovered = checkout switch
         {
             RunCheckout.Kept => "its worktree was on the volume that survived, so its commits and uncommitted edits are back",
             RunCheckout.RestoredFromCheckpoint => "its volume was gone too; the worktree was restored from the last checkpoint (commits and edits up to it), and what the run did after it is lost",
             _ => "its volume was gone too and no checkpoint was kept; the worktree was checked out again from the base repository, and commits and edits the run had not pushed are lost",
-        });
+        };
+        var note = $"The run {Noun} no longer existed and was made again: {recovered}.";
+        _recoveryNotes[run] = note;
+        Logger?.LogWarning("Run {Run}: {Note}", run, note);
         return true;
     }
 

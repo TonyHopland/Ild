@@ -43,6 +43,9 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order; the garbage collection that follows is not in it.</summary>
     public List<string> Deleted { get; } = [];
 
+    /// <summary>The pod's volume is gone: its next start finds no checkout and clones again.</summary>
+    public void ForgetCheckout(string pod) { lock (_gate) _checkedOut.Remove(pod); }
+
     private readonly List<FakeExec> _execs = [];
 
     /// <summary>The commands started so far; a copy, since a command may start while a test reads them.</summary>
@@ -405,6 +408,8 @@ internal sealed class FakeExec(string pod, IReadOnlyList<string> command, bool w
     public string StdinSoFar() => Encoding.UTF8.GetString(_stdin.ToArray());
 
     public Task WriteStdoutAsync(string text) => SendAsync(1, Encoding.UTF8.GetBytes(text));
+
+    public Task WriteStdoutBytesAsync(byte[] data) => SendAsync(1, data);
 
     public Task WriteStderrAsync(string text) => SendAsync(2, Encoding.UTF8.GetBytes(text));
 

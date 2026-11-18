@@ -91,4 +91,10 @@ public enum EventType
 
     /// <summary>A person chose Retry or Resume for a node that failed because the run's container ended (who, which, and whether they gave input).</summary>
     FailedNodeActionTaken = 29,
+
+    /// <summary>The run's pod or container was gone and was made again; says what of the run's work came back and what did not.</summary>
+    RunRecovered = 30,
+
+    /// <summary>The run's worktree could not be checkpointed outside its pod, so a lost pod would take what the run did since the last checkpoint.</summary>
+    CheckpointFailed = 31,
 }

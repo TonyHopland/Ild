@@ -1910,6 +1910,100 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(new[] { Name(failed), Name(halted), Name(waiting) }.Order(), _api.Names("pods").Order());
     }
 
+    private static (int Code, byte[] Out, string Err) RunLocal(string script, byte[]? stdin, params string[] args)
+    {
+        var psi = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin is not null };
+        foreach (var a in new[] { "-c", script, "bash" }.Concat(args)) psi.ArgumentList.Add(a);
+        psi.Environment["GIT_AUTHOR_NAME"] = psi.Environment["GIT_COMMITTER_NAME"] = "T";
+        psi.Environment["GIT_AUTHOR_EMAIL"] = psi.Environment["GIT_COMMITTER_EMAIL"] = "t@example.test";
+        using var p = Process.Start(psi)!;
+        var err = p.StandardError.ReadToEndAsync();
+        if (stdin is not null) { p.StandardInput.BaseStream.Write(stdin); p.StandardInput.Close(); }
+        using var output = new MemoryStream();
+        p.StandardOutput.BaseStream.CopyTo(output);
+        p.WaitForExit();
+        return (p.ExitCode, output.ToArray(), err.Result);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_and_volume_were_deleted_is_made_again_and_gets_its_commits_and_edits_back_from_its_checkpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        const string Branch = "ild/wi-1-run";
+        // What the run did in its pod: a commit, an edit to a tracked file and a new file.
+        var podClone = Path.Combine(_scratch, "pod");
+        Git(_scratch, "clone", "-q", baseRepo, podClone);
+        Git(podClone, "checkout", "-q", "-b", Branch);
+        File.WriteAllText(Path.Combine(podClone, "work.txt"), "committed");
+        Git(podClone, "add", "-A");
+        Git(podClone, "-c", "user.email=t@example.test", "-c", "user.name=T", "commit", "-q", "-m", "work");
+        File.WriteAllText(Path.Combine(podClone, "a.txt"), "edited");
+        File.WriteAllText(Path.Combine(podClone, "new.txt"), "untracked");
+        var head = Process.Start(new ProcessStartInfo("git", ["-C", podClone, "rev-parse", "HEAD"]) { RedirectStandardOutput = true })!;
+        var committed = (await head.StandardOutput.ReadToEndAsync(ct)).Trim();
+
+        // The new pod: a clone of the base, as the host makes it; the host's scripts run for real against these two directories.
+        var newClone = Path.Combine(_scratch, "again");
+        Git(_scratch, "clone", "-q", baseRepo, newClone);
+        byte[]? restoreBundle = null;
+        _api.OnExec = async e =>
+        {
+            var script = e.Command.FirstOrDefault(c => c == ExecRunHost.CheckpointScript || c == ExecRunHost.RestoreScript);
+            if (script is null)
+            {
+                if (e.WantsStdin) await e.ReadStdinToEndAsync();
+                await e.ExitAsync(0);
+                return;
+            }
+            var tail = e.Command.SkipWhile(c => c != "bash").Skip(1).ToArray();
+            if (script == ExecRunHost.CheckpointScript)
+            {
+                var (code, bundle, _) = RunLocal(script, null, podClone);
+                await e.WriteStdoutBytesAsync(bundle);
+                await e.ExitAsync(code);
+            }
+            else
+            {
+                restoreBundle = await e.ReadStdinToEndAsync();
+                var (code, _, err) = RunLocal(script, restoreBundle, [newClone, .. tail.Skip(1)]);
+                await e.WriteStderrAsync(err);
+                await e.ExitAsync(code);
+            }
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, Branch, Repo), ct);
+
+        Assert.True(await _host.CheckpointAsync(_run, ct));
+
+        // The pod and its volume are deleted; the run's record in its ConfigMap is not.
+        var client = _api.Client();
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        await client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        _api.ForgetCheckout(Name(_run));
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
+        await process.WaitForExitAsync(ct);
+
+        Assert.NotEmpty(restoreBundle!);
+        Assert.Equal(committed, GitOut(newClone, "rev-parse", "HEAD"));
+        Assert.Equal(Branch, GitOut(newClone, "rev-parse", "--abbrev-ref", "HEAD"));
+        Assert.Equal("committed", File.ReadAllText(Path.Combine(newClone, "work.txt")));
+        Assert.Equal("edited", File.ReadAllText(Path.Combine(newClone, "a.txt")));
+        Assert.Equal("untracked", File.ReadAllText(Path.Combine(newClone, "new.txt")));
+        var note = _host.TakeRecoveryNote(_run);
+        Assert.Contains("restored from the last checkpoint", note);
+        Assert.Null(_host.TakeRecoveryNote(_run));
+    }
+
+    private static string GitOut(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, RedirectStandardOutput = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        var text = p.StandardOutput.ReadToEnd().Trim();
+        p.WaitForExit();
+        return text;
+    }
+
     // -- Installers left by a crash ------------------------------------------------
 
     [Fact]
