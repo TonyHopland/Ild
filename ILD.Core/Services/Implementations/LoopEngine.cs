@@ -1790,6 +1790,28 @@ public sealed partial class LoopEngine : ILoopEngine
     private static bool IsAlive(LoopRunStatus status)
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 
+    public async Task ParkRunOnLostPodAsync(Guid runId, RunTermination ended)
+    {
+        var reason = ended.Describe() + " " + RunTermination.LostText("pod");
+        Guid? nodeId;
+        using (var scope = _sp.CreateScope())
+            nodeId = (await scope.ServiceProvider.GetRequiredService<ILoopRunStore>().GetByIdAsync(runId))?.CurrentNodeId;
+        await MarkRunCrashedAsync(runId, reason, ended);
+        // The driving loop may be waiting on an exec that will never answer: it ends here, and finds the run parked.
+        if (_runCts.TryGetValue(runId, out var cts))
+        {
+            try { cts.Cancel(); } catch { }
+        }
+        if (_runTasks.TryGetValue(runId, out var task))
+            await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(30)));
+        // Cutting the loop off marks its node Interrupted; the node failed because the pod was lost, which is what a retry should be told.
+        if (nodeId is not { } node) return;
+        using var after = _sp.CreateScope();
+        var store = after.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        if (await store.GetRunNodeAsync(runId, node) is { Status: LoopRunNodeStatus.Interrupted } interrupted)
+            await CompleteRunNodeAsync(store, interrupted.Id, LoopRunNodeStatus.Failed, interrupted.Output, Truncate(reason, MaxHumanFeedbackReasonLength));
+    }
+
     /// <summary>
     /// Handler for an unhandled exception in the run loop. Parks the run for a
     /// person on the execution the crash cut short, which is marked Failed so
@@ -1797,7 +1819,7 @@ public sealed partial class LoopEngine : ILoopEngine
     /// the run is still Running: a crash during a transition that already moved
     /// the run to a terminal/parked state must not clobber that state.
     /// </summary>
-    private async Task MarkRunCrashedAsync(Guid runId, string reason)
+    private async Task MarkRunCrashedAsync(Guid runId, string reason, RunTermination? ended = null)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;
@@ -1819,9 +1841,11 @@ public sealed partial class LoopEngine : ILoopEngine
         {
             await CompleteRunNodeAsync(store, crashed.Id, LoopRunNodeStatus.Failed, crashed.Output, shortReason);
             await _notifier.NodeStateChangedAsync(runId, crashed.LoopNodeId, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
+            if (ended is not null && sp.GetService<IEventLogService>() is { } log)
+                await TrySafe(runId, () => log.AppendAsync(runId, EventType.RunContainerEnded, ended.Describe(), crashed.LoopNodeId, runNodeId: crashed.Id));
         }
 
-        await ParkForHumanAsync(run, crashed?.LoopNodeId, crashed?.NodeLabel, haltReason: null, HumanFeedbackReasons.RunCrashed,
+        await ParkForHumanAsync(run, crashed?.LoopNodeId, crashed?.NodeLabel, haltReason: null, ended?.HumanFeedbackReason ?? HumanFeedbackReasons.RunCrashed,
             shortReason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), crashed?.Id,
             recordedReason: reason);
     }

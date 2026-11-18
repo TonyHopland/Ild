@@ -177,6 +177,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => AgentUpdateOptions.FromEnvironment(sp.GetRequiredService<ILogger<AgentUpdateOptions>>()));
         services.AddHostedService<ManagedAgentAutoUpdater>();
         services.AddHostedService<StuckRunWatchdog>();
+        services.AddHostedService<RunPodWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddHostedService<ChildWaitService>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();

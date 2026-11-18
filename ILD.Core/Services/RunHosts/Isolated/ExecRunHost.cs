@@ -460,10 +460,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         try
         {
             var state = await ReadRunStateAsync(ownerId, ct);
+            // Gone is gone, whatever ended the one before it: a kept reason belongs to a pod that has since been replaced.
+            if (!state.Found) return new RunTermination(RunTerminationKind.PodLost);
             Remember(ownerId, state.Ended);
             if (state.Ended is { } live) return Caused(live, DateTimeOffset.UtcNow, since);
             if (_terminations.TryGetValue(ownerId, out var kept)) return Caused(kept.Termination, kept.RecordedAt, since);
-            return state.Found ? null : new RunTermination(RunTerminationKind.PodLost);
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

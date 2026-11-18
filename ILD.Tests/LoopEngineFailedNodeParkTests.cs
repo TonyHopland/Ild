@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
@@ -191,6 +192,30 @@ public class LoopEngineFailedNodeParkTests
         Assert.Equal(2, agent.Invocations);
         Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == h.NodesById["b"].Id && n.Status == LoopRunNodeStatus.Succeeded);
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_is_gone_while_a_node_waits_on_it_is_parked_on_that_node_with_the_lost_pod_reason_and_the_wait_is_cut_off()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        var blocking = new BlockingExecutor(NodeType.AI);
+        h.Registry.Register(blocking);
+        h.SeedRun("a");
+        await h.LaunchAsync();
+        await blocking.Entered;
+
+        await h.Engine.ParkRunOnLostPodAsync(h.RunId, new RunTermination(RunTerminationKind.PodLost));
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
+        var node = Assert.Single(h.ReloadRunNodes());
+        Assert.Equal(LoopRunNodeStatus.Failed, node.Status);
+        Assert.Contains("no longer exists", node.Error);
+        Assert.Single(Events(h, EventType.RunContainerEnded));
+        VerifyItemMovedTo(h, RemoteWorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
     }
 
     private const string PreviewConflict =
