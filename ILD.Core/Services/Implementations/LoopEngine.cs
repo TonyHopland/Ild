@@ -1211,6 +1211,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         // routing when the run state changed underneath us.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null, ok.Usage);
+                        await CheckpointRunAsync(sp, run.Id);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeCompleted, ok.Output ?? string.Empty, node.Id, runNodeId: id));
@@ -1267,6 +1268,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         // Same stale-write guard as the Success branch.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
+                        await CheckpointRunAsync(sp, run.Id);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
                         if (eventLog is not null && runNodeId is Guid endedId && f.Termination is { } ended)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunContainerEnded, ended.Describe(), node.Id, runNodeId: endedId));
@@ -1305,6 +1307,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         // run's CTS to kill a live agent, and there is none here.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, intr.Output, intr.Reason);
+                        await CheckpointRunAsync(sp, run.Id);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                         if (eventLog is not null && runNodeId is Guid interruptedId)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeInterrupted, intr.Reason, node.Id, runNodeId: interruptedId));
@@ -1342,6 +1345,7 @@ public sealed partial class LoopEngine : ILoopEngine
                     {
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.WaitingHuman, wa.Output, null);
+                        await CheckpointRunAsync(sp, run.Id);
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
@@ -1767,6 +1771,20 @@ public sealed partial class LoopEngine : ILoopEngine
         if (!IsAlive(run.Status)) return;
         await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, humanFeedbackReason,
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
+    }
+
+    // How long a checkpoint of a run's worktree may take before the run goes on without it.
+    private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Keeps the run's worktree outside its pod (ADR-0040) after a node ends and before the run waits for a person, so a pod that is lost while
+    /// the run is parked does not take the only copy of the work. Best effort: a run never stops for it.
+    /// </summary>
+    private async Task CheckpointRunAsync(IServiceProvider sp, Guid runId)
+    {
+        if (sp.GetService<IRunLifecycle>() is not { } host) return;
+        using var limit = new CancellationTokenSource(CheckpointTimeout);
+        await TrySafe(runId, () => host.CheckpointAsync(runId, limit.Token));
     }
 
     private static bool IsAlive(LoopRunStatus status)

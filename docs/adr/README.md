@@ -1,5 +1,4 @@
 # Architecture Decision Records
-
 Short records of architectural decisions that are **hard to reverse, surprising without context, and the result of a real trade-off**. Each captures _that_ a decision was made and _why_ — not implementation detail (that lives in [CONTEXT.md](../../CONTEXT.md)).
 
 | ADR                                                            | Decision                                                                                  |
@@ -41,5 +40,7 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0036](./0036-runs-always-in-containers.md)                    | ILD from its image always runs agents in containers; local runs are for `dotnet run` only |
 | [0037](./0037-external-agents-use-expiring-revocable-grants.md)  | External agents authenticate with expiring, revocable grants; a grant is its own session   |
 | [0038](./0038-chat-reads-a-worktree-through-fixed-read-only-git-commands.md) | Chat reads a work item's worktree, uncommitted changes included, through fixed read-only git commands |
+
+| [0040](./0040-a-runs-work-does-not-live-only-in-its-pod.md) | A run is made again when its pod is lost, and its work is kept as a hidden checkpoint ref outside the pod |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

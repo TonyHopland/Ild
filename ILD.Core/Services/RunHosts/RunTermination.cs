@@ -34,13 +34,13 @@ public sealed record RunTermination(
         RunTerminationKind.Evicted => With("The run's container was evicted by its node", Detail),
         RunTerminationKind.NodeLost => With("The run's container was lost with its node", Detail),
         RunTerminationKind.Deleted => With("The run's container was deleted while a command was running in it", Detail),
-        RunTerminationKind.PodLost => PodLostText,
+        RunTerminationKind.PodLost => "The run's container no longer exists.",
         _ => With("The run's container ended", Detail),
     };
 
-    /// <summary>What a run whose pod or container no longer exists is told, with the way on.</summary>
-    public const string PodLostText =
-        "The run pod no longer exists. Retry the node: ILD makes the pod again and restores the worktree from the volume or the last checkpoint it kept, and says what it could not recover.";
+    /// <summary>What a command in a run whose <paramref name="noun"/> (pod or container) is gone and could not be made again is told, with the way on.</summary>
+    public static string LostText(string noun)
+        => $"The run {noun} no longer exists and could not be made again. Retry the node; if that fails, start the work item again. What the run had not pushed and ILD had not checkpointed is lost.";
 
     /// <summary>The reason a node that failed this way is parked with: its own for an out-of-memory kill, the generic one for the rest.</summary>
     public string HumanFeedbackReason => Kind == RunTerminationKind.OutOfMemory ? HumanFeedbackReasons.OutOfMemory : HumanFeedbackReasons.NodeFailed;

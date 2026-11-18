@@ -517,7 +517,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             if (!await ReviveRunAsync(owner.Id, ex, ct))
             {
                 if (!ct.IsCancellationRequested && !(await ReadRunStateAsync(owner.Id, ct)).Found)
-                    throw new RunPodLostException(owner.Id, RunTermination.PodLostText);
+                    throw new RunPodLostException(owner.Id, RunTermination.LostText(Noun));
                 throw;
             }
             return await OpenExecInAsync(name, command, environment, stdin, tty, asRoot, ct);
@@ -567,7 +567,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
     {
         await SyncPreviewDataBackAsync(environment, ct);
+        var request = await ReadRunRequestAsync(environment.OwnerId, ct);
         await RemoveRunAsync(environment.OwnerId, ct);
+        // The run is over: its checkpoint goes with it.
+        if (request is not null)
+            await runner.RunAsync("git", ["-C", request.BasePath, "update-ref", "-d", CheckpointRef(environment.OwnerId)], "/", ct);
         _terminations.TryRemove(environment.OwnerId, out _);
     }
 
@@ -852,7 +856,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     private static string CheckpointRef(Guid run) => $"refs/ild/runs/{run:N}";
 
-    private const string CheckpointScript = """
+    internal const string CheckpointScript = """
         cd -- "$1" || exit 1
         d=$(mktemp -d) || exit 1
         trap 'rm -rf -- "$d"' EXIT
@@ -864,12 +868,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         git bundle create --quiet - refs/ild/checkpoint --not --remotes=origin
         """;
 
-    private const string RestoreScript = """
+    internal const string RestoreScript = """
         d=$(mktemp -d) || exit 1
         trap 'rm -rf -- "$d"' EXIT
         cat > "$d/in.bundle" || exit 1
         cd -- "$1" || exit 1
-        git fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" "+refs/ild/checkpoint:refs/ild/checkpoint" || exit 1
+        git fetch --quiet --no-tags --no-write-fetch-head -- "$d/in.bundle" "+$3:refs/ild/checkpoint" || exit 1
         parent=$(git rev-parse --verify --quiet "refs/ild/checkpoint^") || exit 1
         git checkout --quiet -B "$2" "$parent" || exit 1
         git read-tree --reset -u refs/ild/checkpoint || exit 1
@@ -917,12 +921,12 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         await using (var sink = bundleFile.OpenWrite())
         {
             var created = await runner.RunAsync(
-                "git", ["-C", request.BasePath, "bundle", "create", "--quiet", "-", $"{CheckpointRef(owner)}:refs/ild/checkpoint"], "/", ct, null,
+                "git", ["-C", request.BasePath, "bundle", "create", "--quiet", "-", CheckpointRef(owner)], "/", ct, null,
                 new ProcessRunOptions(StandardOutputTo: sink));
             if (!created.Success) return false;
         }
         await using var bundle = bundleFile.OpenRead();
-        var restored = await ExecAsync(owner, IldScript("/bin/bash", RestoreScript, workingDirectory, request.BranchName), bundle, null, ct);
+        var restored = await ExecAsync(owner, IldScript("/bin/bash", RestoreScript, workingDirectory, request.BranchName, CheckpointRef(owner)), bundle, null, ct);
         if (!restored.Success)
             Logger?.LogWarning("Could not put the checkpoint of run {Run} back: {Error}", owner, restored.StdErr.Trim());
         return restored.Success;

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run whose pod was deleted continues on retry instead of failing.** The pod is made again with the run's work, and a pod that cannot be recovered is reported as lost.
 - **A Claude Code or Codex turn that exits cleanly but gives no usable answer still keeps its session,** so the node can be resumed.
 
 ## [0.26.0] - 2026-11-15

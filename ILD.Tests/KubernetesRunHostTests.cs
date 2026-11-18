@@ -1862,7 +1862,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var failure = await Assert.ThrowsAsync<RunPodLostException>(
             () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct));
 
-        Assert.Equal(RunTermination.PodLostText, failure.Message);
+        Assert.Equal(RunTermination.LostText("pod"), failure.Message);
         Assert.DoesNotContain("404", failure.Message);
     }
 
