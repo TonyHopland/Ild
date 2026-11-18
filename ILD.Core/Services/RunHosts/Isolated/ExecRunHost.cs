@@ -463,7 +463,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             Remember(ownerId, state.Ended);
             if (state.Ended is { } live) return Caused(live, DateTimeOffset.UtcNow, since);
             if (_terminations.TryGetValue(ownerId, out var kept)) return Caused(kept.Termination, kept.RecordedAt, since);
-            return state.Found ? null : new RunTermination(RunTerminationKind.Deleted);
+            return state.Found ? null : new RunTermination(RunTerminationKind.PodLost);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

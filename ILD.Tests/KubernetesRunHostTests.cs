@@ -1878,6 +1878,38 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal(Repo, request.RepositoryId);
     }
 
+    // -- A run with an active work item is never taken down --------------------------
+
+    [Fact]
+    public async Task The_run_pod_asks_a_cluster_autoscaler_not_to_drain_its_node_under_it()
+    {
+        await CreateRunAsync();
+
+        Assert.Equal("false", _api.Get<V1Pod>("pods", Name(_run))!.Metadata.Annotations[KubernetesManifests.SafeToEvictAnnotation]);
+    }
+
+    [Fact]
+    public async Task The_sweep_and_the_startup_listing_leave_the_pods_of_runs_that_are_halted_failed_or_waiting_alone_and_take_a_deleted_runs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var halted = Guid.NewGuid();
+        var failed = Guid.NewGuid();
+        var waiting = Guid.NewGuid();
+        var deleted = Guid.NewGuid();
+        foreach (var run in new[] { halted, failed, waiting, deleted }) SeedRun(run, Instance);
+        // The ones the database still has: everything but Completed and Cancelled.
+        var host = new KubernetesRunHost(_api.Client(), Options(), FakeKubernetesApi.Namespace, new ProcessRunner(), _log)
+        {
+            RetainedRuns = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { halted, failed, waiting }),
+        };
+
+        var listed = await host.ListLeftoversAsync(new HashSet<Guid>(), ct);
+        await new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())).SweepAsync(host, ct);
+
+        Assert.Equal([Name(deleted).Replace("ild-run-", "")], listed.Select(l => l.Location.Replace("ild-run-", "")));
+        Assert.Equal(new[] { Name(failed), Name(halted), Name(waiting) }.Order(), _api.Names("pods").Order());
+    }
+
     // -- Installers left by a crash ------------------------------------------------
 
     [Fact]

@@ -241,8 +241,16 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return facing == host ? [host] : [host, facing];
     }
 
+    // A cluster autoscaler that drains a node on scale-down skips a pod with this annotation: a run's pod holds the run's work, and a node
+    // that is removed under it takes the pod object with it.
+    internal const string SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict";
+
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false, string? nameServer = null)
-        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
+    {
+        var pod = BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
+        pod.Metadata.Annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = "false" };
+        return pod;
+    }
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];
