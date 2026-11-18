@@ -576,6 +576,7 @@ public class LoopEngineFailedNodeParkTests
         public Task ResumedAsync(Guid runId) => Task.CompletedTask;
         public Task HaltedAsync(Guid runId) => Task.CompletedTask;
         public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
+        public Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks) => Task.CompletedTask;
         public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
         public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
     }
@@ -597,6 +598,7 @@ public class LoopEngineFailedNodeParkTests
         public Task ResumedAsync(Guid runId) => Task.CompletedTask;
         public Task HaltedAsync(Guid runId) => Task.CompletedTask;
         public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
+        public Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks) => Task.CompletedTask;
         public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
         public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
     }

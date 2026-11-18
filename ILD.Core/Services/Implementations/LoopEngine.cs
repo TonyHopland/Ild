@@ -301,7 +301,6 @@ public sealed partial class LoopEngine : ILoopEngine
         run.CompletedAt ??= DateTime.UtcNow;
         run.HumanFeedbackReason = reason;
         await loopRunStore.UpdateRunAsync(run);
-        await StopWaitedChildrenAsync(scope.ServiceProvider, run);
         await StaleHumanInputProposalsAsync(scope.ServiceProvider, run, runNodeId: null);
         _progressBuffer.Clear(runId);
         if (scope.ServiceProvider.GetService<IEventLogService>() is { } eventLog)
@@ -474,29 +473,16 @@ public sealed partial class LoopEngine : ILoopEngine
         await _notifier.HaltedAsync(runId);
     }
 
-    public Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false)
-        => ResumeFromHaltCoreAsync(runId, note, automatic, childWaitOnly: false, onAccepted: null);
-
-    /// <summary>Whether the run was resumed. With <paramref name="childWaitOnly"/> only a run still waiting for its children, and not paused, is.</summary>
-    /// <param name="onAccepted">Runs once the resume is certain to happen, before the node is launched again.</param>
-    private async Task<bool> ResumeFromHaltCoreAsync(Guid runId, string? note, bool automatic, bool childWaitOnly, Func<IServiceProvider, Task>? onAccepted)
+    public async Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
-        if (run is null) return false;
+        if (run is null) return;
         // Only a halted, parked run can be steered/resumed here.
-        if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return false;
-        if (childWaitOnly && (run.HaltReason != HaltReason.WaitingForChildren || run.IsPaused)) return false;
-
-        var wokeFromChildren = run.HaltReason == HaltReason.WaitingForChildren;
-        if (ChildWaitState.TryParse(run.ChildWaitJson) is not null)
-        {
-            await SettleWaitingAttemptAsync(loopRunStore, run, LoopRunNodeStatus.Succeeded, null);
-            run.ChildWaitJson = null;
-        }
+        if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return;
         await KillStrayCommandsAsync(sp, runId);
         var old = run.Status;
         // A non-null note (empty allowed) flags the AI node to continue the
@@ -512,7 +498,7 @@ public sealed partial class LoopEngine : ILoopEngine
             // (ADR-0018) keeps counting the unattended stretch this resume
             // continues, and the automatic resumes spent in that same stretch
             // grow until the sweeper's bound leaves the run parked for a person.
-            if (!wokeFromChildren) run.ThrottleAutoResumeCount++;
+            run.ThrottleAutoResumeCount++;
         }
         else
         {
@@ -533,13 +519,10 @@ public sealed partial class LoopEngine : ILoopEngine
         // note is ILD's, not a person's.
         if (!automatic && !string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
-        if (onAccepted is not null)
-            await onAccepted(sp);
         await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
             reason: automatic ? "Run resumed automatically" : "Run resumed", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
-        return true;
     }
 
     /// <summary>
@@ -804,14 +787,6 @@ public sealed partial class LoopEngine : ILoopEngine
             resume = (target.AiSessionId!, WithNote(outOfMemory ? OutOfMemoryNote(target.Error, resumed: true) : ResumeNote(target.Error), note));
         }
 
-        if (ChildWaitState.TryParse(run.ChildWaitJson) is not null)
-        {
-            if (!resumeSession)
-                await StopWaitedChildrenAsync(scope.ServiceProvider, run);
-            await SettleWaitingAttemptAsync(loopRunStore, run, LoopRunNodeStatus.Interrupted, resumeSession ? "Resumed by a person" : "Restarted by a person");
-            run.ChildWaitJson = null;
-        }
-
         await KillStrayCommandsAsync(scope.ServiceProvider, runId);
         if (ended)
             await ReopenToRetryAsync(run, target, prevOutput, resume, loopRunStore, workItems, eventLog);
@@ -859,7 +834,6 @@ public sealed partial class LoopEngine : ILoopEngine
         // the run parks at a genuine human-feedback node. Mirrors ResumeFromHaltAsync.
         run.IsHalted = false;
         run.HaltReason = null;
-        run.ChildWaitJson = null;
         run.ThrottleResetAt = null;
         // A resume continues the failed attempt's agent session with a short note; the
         // AI node executor sends only that note, as it does after a halt.
@@ -944,7 +918,6 @@ public sealed partial class LoopEngine : ILoopEngine
         var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
         var cleanup = nodes.FirstOrDefault(n => n.NodeType == NodeType.Cleanup);
         if (cleanup is null) return;
-        await StopWaitedChildrenAsync(sp, run);
         run.CurrentNodeId = cleanup.Id;
         await loopRunStore.UpdateRunAsync(run);
         await ExecuteSingleNodeAsync(run, cleanup, sp, CancellationToken.None);
@@ -1122,6 +1095,11 @@ public sealed partial class LoopEngine : ILoopEngine
                 }
                 var seq = _progressBuffer.Append(run.Id, line);
                 await _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
+            },
+            async tasks =>
+            {
+                _progressBuffer.SetBackgroundTasks(run.Id, tasks);
+                await _notifier.BackgroundTasksChangedAsync(run.Id, node.Id, tasks);
             });
 
         async Task EndNodeAsync(LoopRunNodeStatus status, string? output, string? error, ILD.Data.DTOs.TokenUsage? usage = null)
@@ -1226,7 +1204,6 @@ public sealed partial class LoopEngine : ILoopEngine
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         run.PreviousNodeOutput = ok.Output;
-                        run.ChildWaitCycleCount = 0;
                         run.ExternalActionResult = null;
                         run.ExternalActionResultType = ExternalActionResultType.Success;
                         run.ExternalActionEdgeName = null;
@@ -1335,16 +1312,6 @@ public sealed partial class LoopEngine : ILoopEngine
                         // should continue that same session.
                         await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.Throttled,
                             HumanFeedbackReasons.AiProviderThrottled, intr.Reason, loopRunStore, workItems, eventLog, runNodeId);
-                        return ParkResult.Stop;
-                    }
-                    case NodeOutcome.WaitingChildren wc:
-                    {
-                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.WaitingIld, wc.Output, "Waiting for ILD: the agent's processes are still running", wc.Usage);
-                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingIld);
-                        if (!stillCurrent)
-                            return ParkResult.Stop;
-                        await ParkForChildrenAsync(run, node, wc.Children, runNodeId, loopRunStore, sp, workItems, eventLog);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingAction wa:
@@ -1465,6 +1432,8 @@ public sealed partial class LoopEngine : ILoopEngine
         finally
         {
             if (enumerator is not null) await enumerator.DisposeAsync();
+            // The launch is over, however it ended (a timeout kills the CLI before it can say its tasks are gone).
+            await ClearBackgroundTasksAsync(run.Id, node.Id);
         }
         return ParkResult.Stop;
     }
@@ -1705,7 +1674,6 @@ public sealed partial class LoopEngine : ILoopEngine
     {
         run.AiTraversalCount = 0;
         run.ThrottleAutoResumeCount = 0;
-        run.ChildWaitCycleCount = 0;
     }
 
     /// <summary>
@@ -1761,6 +1729,13 @@ public sealed partial class LoopEngine : ILoopEngine
         await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Done,
             reason: "Run completed", currentLoopRunId: run.Id);
         return ParkResult.Stop;
+    }
+
+    private async Task ClearBackgroundTasksAsync(Guid runId, Guid nodeId)
+    {
+        if (_progressBuffer.Snapshot(runId).BackgroundTasks is null) return;
+        _progressBuffer.SetBackgroundTasks(runId, []);
+        await TrySafe(runId, () => _notifier.BackgroundTasksChangedAsync(runId, nodeId, []));
     }
 
     /// <summary>

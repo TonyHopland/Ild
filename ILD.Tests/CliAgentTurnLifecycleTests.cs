@@ -12,7 +12,7 @@ namespace ILD.Tests;
 
 /// <summary>
 /// The agent turn every CLI adapter shares, driven through a scripted turn on a fake host: what it refuses, how it reports a
-/// CLI that does not start, outlives the turn or cannot be killed, and what it makes of the processes the agent left running.
+/// CLI that does not start, outlives the turn or cannot be killed.
 /// </summary>
 public class CliAgentTurnLifecycleTests
 {
@@ -192,70 +192,5 @@ public class CliAgentTurnLifecycleTests
 
         Assert.Equal("[scripted-error] unreadable", result.Error);
         Assert.Contains("dispose", adapter.Turn!.Steps);
-    }
-
-    [Fact]
-    public async Task Processes_left_running_at_the_end_of_the_turn_come_back_with_a_successful_result()
-    {
-        var child = _host.LeaveRunning(4242, "dotnet test");
-        _host.LeaveRunning(4243, "/bin/scripted --fingerprint");
-        _host.StillRunningFailure = new InvalidOperationException("cannot tell");
-        var adapter = Adapter();
-        adapter.Fingerprint = "--fingerprint";
-        var ctx = Context();
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Assert.Equal([child], result.LiveChildren);
-        var launch = Assert.Single(_host.Started);
-        Assert.Equal(ctx.RunContext.LoopRunId.ToString("N"), launch.Environment![AgentChildren.LaunchVariable]);
-        Assert.Equal("1", launch.Environment["FROM_TURN"]);
-        Assert.Equal(ctx.RunContext.LoopRunId.ToString("N"), Assert.Single(_host.ListChildrenCalls).LaunchId);
-    }
-
-    [Fact]
-    public async Task A_process_that_ended_with_the_cli_is_not_left_running_whatever_completing_the_turn_then_meets()
-    {
-        _host.LeaveRunning(4242, "language-server");
-        var adapter = Adapter();
-        adapter.Fingerprint = "--fingerprint";
-        adapter.AfterTurnEnded = () => _host.RunningPids.Remove(4242);
-        adapter.OnParse = () => _host.StillRunningFailure = new OperationCanceledException();
-
-        var result = await adapter.ExecuteAsync(Context());
-
-        Assert.True(result.Success);
-        Assert.Empty(result.LiveChildren!);
-    }
-
-    [Fact]
-    public async Task A_failed_turn_reports_no_processes_left_running()
-    {
-        _host.LeaveRunning(4242, "dotnet test");
-        var adapter = Adapter();
-        adapter.Fingerprint = "--fingerprint";
-        _host.Script = _ => FakeCommandScript.Prints("", "", 1);
-
-        var result = await adapter.ExecuteAsync(Context());
-
-        Assert.False(result.Success);
-        Assert.Null(result.LiveChildren);
-    }
-
-    [Fact]
-    public async Task A_chat_turn_and_a_cli_without_a_fingerprint_look_for_no_processes()
-    {
-        _host.LeaveRunning(4242, "dotnet test");
-        var chat = Adapter();
-        chat.Fingerprint = "--fingerprint";
-
-        var chatResult = await chat.ExecuteAsync(Context(chat: Guid.NewGuid()));
-        var plainResult = await Adapter().ExecuteAsync(Context());
-
-        Assert.Null(chatResult.LiveChildren);
-        Assert.Null(plainResult.LiveChildren);
-        Assert.Empty(_host.ListChildrenCalls);
-        Assert.All(_host.Started, launch => Assert.False(launch.Environment!.ContainsKey(AgentChildren.LaunchVariable)));
-        Assert.Null(chat.Turn!.TurnEnded);
     }
 }

@@ -117,12 +117,6 @@ public abstract class CliAgentTurn : IAsyncDisposable
     /// <summary>What a turn that succeeded used; null when the CLI does not say.</summary>
     public virtual Task<TokenUsage?> UsageAsync() => Task.FromResult<TokenUsage?>(null);
 
-    /// <summary>
-    /// For the stream reader to await when the CLI says its turn is over, while the CLI is still there to be told apart from what it
-    /// started. Null when nothing is listening.
-    /// </summary>
-    public Func<Task>? TurnEnded { get; internal set; }
-
     /// <summary>Removes what the turn wrote for the launch. Runs however the turn ended, and must not throw.</summary>
     public virtual ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

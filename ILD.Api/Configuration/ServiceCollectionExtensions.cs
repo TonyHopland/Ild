@@ -179,7 +179,6 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<RunPodWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
-        services.AddHostedService<ChildWaitService>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();
         services.AddSingleton<IFinishedRunCleaner, FinishedRunCleaner>();
         services.AddSingleton(sp => ClaudeProjectFolders.ForProcess(sp.GetRequiredService<ILogger<ClaudeProjectFolders>>()));

@@ -9,6 +9,7 @@ import {
   LoopNodeEdge,
   WorktreePreview,
   AiProvider,
+  RunBackgroundTask,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
 import {
@@ -77,6 +78,9 @@ interface VersionOutputs {
   fixed: FixedOutputs;
 }
 
+// One shared empty list, so clearing an already empty list is not a state change.
+const NO_BACKGROUND_TASKS: RunBackgroundTask[] = [];
+
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
  * loop templates, preview and live run state a work item's detail view needs, and
@@ -106,6 +110,15 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [progressText, setProgressText] = useState("");
+  // What the running node's agent CLI is waiting for, replaced whenever the server says it changed.
+  const [backgroundTasks, setBackgroundTasks] = useState<RunBackgroundTask[]>(NO_BACKGROUND_TASKS);
+  // Replaces the list, keeping the one already shown when the new one says the same (a replay repeats what a live event sent).
+  const showBackgroundTasks = useCallback((next: RunBackgroundTask[] | null | undefined) => {
+    const incoming = next?.length ? next : NO_BACKGROUND_TASKS;
+    setBackgroundTasks((prev) =>
+      JSON.stringify(prev) === JSON.stringify(incoming) ? prev : incoming,
+    );
+  }, []);
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   // The user's own start request: its own flag so the quiet re-reads that follow
@@ -676,6 +689,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   useEffect(() => {
     if (!shouldStream || !workItem?.currentLoopRunId) {
       setProgressText("");
+      showBackgroundTasks(null);
       return;
     }
     // Wait for the connection before subscribing; the effect re-runs (and
@@ -690,6 +704,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     seededSeqRef.current = 0;
     pendingRef.current = [];
     setProgressText("");
+    showBackgroundTasks(null);
 
     const applyChunk = (seq: number, line: string) => {
       if (seq <= seededSeqRef.current) return; // already in the backlog/applied
@@ -711,6 +726,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         return;
       }
       applyChunk(seq, line);
+    };
+
+    const onBackgroundTasksChanged = (message: TypedSignalRMessage<"BackgroundTasksChanged">) => {
+      if (message.payload.runId !== runId) return;
+      showBackgroundTasks(message.payload.tasks);
     };
 
     const refetchSoon = () => {
@@ -738,6 +758,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     // Attach the live listener BEFORE subscribing so no chunk is lost in the
     // window between joining the group and seeding from the backlog.
     runOn("NodeProgress", onNodeProgress);
+    runOn("BackgroundTasksChanged", onBackgroundTasksChanged);
     runOn("LoopRunStateChanged", onLoopRunStateChanged);
     runOn("NodeStateChanged", onNodeStateChanged);
     runOn("RunHalted", onRunHalted);
@@ -745,8 +766,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     void Promise.resolve(runInvoke?.("SubscribeToRun", runId))
       .then((snapshot) => {
         if (cancelled) return;
-        const snap = (snapshot ?? {}) as { text?: string; lastSeq?: number };
+        const snap = (snapshot ?? {}) as {
+          text?: string;
+          lastSeq?: number;
+          backgroundTasks?: RunBackgroundTask[] | null;
+        };
         setProgressText(snap.text ?? "");
+        showBackgroundTasks(snap.backgroundTasks);
         seededSeqRef.current = snap.lastSeq ?? 0;
         seededRef.current = true;
         flushPending();
@@ -761,6 +787,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     return () => {
       cancelled = true;
       runOff("NodeProgress", onNodeProgress);
+      runOff("BackgroundTasksChanged", onBackgroundTasksChanged);
       runOff("LoopRunStateChanged", onLoopRunStateChanged);
       runOff("NodeStateChanged", onNodeStateChanged);
       runOff("RunHalted", onRunHalted);
@@ -774,6 +801,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     runConnectionState,
     workItem?.currentLoopRunId,
     refetchWorkItem,
+    showBackgroundTasks,
   ]);
 
   // Live PR state for the current run: the heartbeat's snapshot, and what the
@@ -965,16 +993,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     return runAction(() => loopRunService.resumeSteer(runId, note), "resume run");
   };
 
-  const handleRestartWaiting = (runId: string | null, note?: string) => {
-    if (!runId) return Promise.resolve();
-    return runAction(() => loopRunService.restartWaitingForIld(runId, note), "restart node");
-  };
-
-  const handleResumeWaiting = (runId: string | null, note?: string) => {
-    if (!runId) return Promise.resolve();
-    return runAction(() => loopRunService.resumeWaitingForIld(runId, note), "resume node");
-  };
-
   const handleRetryFailed = (runId: string | null, note?: string) => {
     if (!runId) return Promise.resolve();
     return runAction(() => loopRunService.retryFailedNode(runId, note), "retry node");
@@ -1080,6 +1098,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     movedOn,
     dismissMovedOn,
     progressText,
+    backgroundTasks,
     shouldStream,
     preview,
     previewLoading,
@@ -1117,8 +1136,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleMerge,
     handleHalt,
     handleResumeSteer,
-    handleRestartWaiting,
-    handleResumeWaiting,
     handleRetryFailed,
     handleResumeFailed,
     handleCleanupDone,

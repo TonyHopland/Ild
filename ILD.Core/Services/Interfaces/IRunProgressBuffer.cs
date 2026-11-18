@@ -6,7 +6,7 @@ namespace ILD.Core.Services.Interfaces;
 /// <see cref="LastSeq"/> is the sequence number of the last chunk included in
 /// it, so a replaying client can drop live chunks it already has.
 /// </summary>
-public readonly record struct RunProgressSnapshot(string Text, long LastSeq);
+public readonly record struct RunProgressSnapshot(string Text, long LastSeq, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask>? BackgroundTasks = null);
 
 /// <summary>
 /// Bounded, in-memory capture of the complete live output produced per run.
@@ -26,6 +26,12 @@ public interface IRunProgressBuffer
 
     /// <summary>Current buffered text and the last assigned sequence number.</summary>
     RunProgressSnapshot Snapshot(Guid runId);
+
+    /// <summary>
+    /// Replace the background work the run's agent CLI is waiting for, as the CLI last reported it (empty when none). Kept with the
+    /// live output so a client that joins or reloads mid-run gets it in the replay.
+    /// </summary>
+    void SetBackgroundTasks(Guid runId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks);
 
     /// <summary>Drop the run's buffer (called when the run becomes terminal).</summary>
     void Clear(Guid runId);

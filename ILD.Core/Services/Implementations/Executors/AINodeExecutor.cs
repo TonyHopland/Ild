@@ -207,7 +207,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 Environment: feeds.Environment,
                 AgentFiles: feeds.FilePath is null ? null : [feeds.FilePath],
                 AgentApiToken: agentToken?.Token,
-                NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken));
+                NetworkMode: await sp.GetService<IEgressPolicy>().LaunchModeAsync(ctx.CancellationToken),
+                OnBackgroundTasks: ctx.BackgroundTasksCallback);
             result = await adapter.ExecuteAsync(agentCtx);
 
             // A resume whose session the CLI no longer has fails at startup. Run the node
@@ -250,11 +251,6 @@ public sealed class AINodeExecutor : INodeExecutor
                 && !string.IsNullOrWhiteSpace(result.SessionId))
             {
                 yield return new NodeOutcome.SessionBound(sessionPlaceholder!, result.SessionId!);
-            }
-            if (result.LiveChildren is { Count: > 0 } liveChildren)
-            {
-                yield return new NodeOutcome.WaitingChildren(liveChildren, result.Output, usage);
-                yield break;
             }
             if (!string.IsNullOrEmpty(result.Output) && cfg.MatchRules is { Count: > 0 })
             {

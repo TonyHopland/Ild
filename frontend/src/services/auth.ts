@@ -684,20 +684,6 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/resume-steer`, { note: note ?? null });
   },
 
-  /**
-   * Restart a node that is Waiting for ILD: its running processes are stopped and the node starts over, with the optional note after its prompt.
-   */
-  restartWaitingForIld: async (id: string, note?: string): Promise<void> => {
-    return api.post<void>(`/loopruns/${id}/waiting-ild/restart`, { note: note ?? null });
-  },
-
-  /**
-   * Resume a node that is Waiting for ILD in the same session without stopping its processes; the agent gets only the optional note.
-   */
-  resumeWaitingForIld: async (id: string, note?: string): Promise<void> => {
-    return api.post<void>(`/loopruns/${id}/waiting-ild/resume`, { note: note ?? null });
-  },
-
   /** Retry the node a run is parked on after it failed: it starts over from scratch, with the optional note after its prompt. */
   retryFailedNode: async (id: string, note?: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/failed-node/retry`, { note: note ?? null });
@@ -1203,9 +1189,6 @@ export const SchedulerSettingKeys = {
   /** Minutes between those automatic retries, and how many a run may spend. */
   ThrottleRetryDelayMinutes: "throttle.retryDelayMinutes",
   ThrottleMaxRetries: "throttle.maxRetries",
-  /** Minutes ILD waits for processes an agent left running, and how many such waits in a row a node may take. */
-  ChildrenWaitMinutes: "children.waitMinutes",
-  ChildrenMaxCycles: "children.maxCycles",
 } as const;
 
 /** Smart chat session titles, and the provider tag they run on (resolved like an AI node's). */

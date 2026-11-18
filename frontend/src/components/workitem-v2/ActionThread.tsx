@@ -12,6 +12,7 @@ import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
 import { placeActionProposals, placeHumanInputProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
+import BackgroundTasks from "../NodeTimeline/BackgroundTasks";
 import HaltSteerControls from "./HaltSteerControls";
 import Icon from "../Icon";
 import { asksForManualMerge } from "./offers";
@@ -399,18 +400,13 @@ function RunThread({
   entries.push(
     <Bubble key="live" side="ai" author="AI" live={streaming}>
       {streaming && <LiveStream text={detail.progressText} />}
+      {streaming && <BackgroundTasks tasks={detail.backgroundTasks} />}
       <HaltSteerControls
         run={view.run}
         workItemStatus={workItem.status}
         onHalt={() => detail.runLock.hold(runId, "halt", () => detail.handleHalt(runId))}
         onResumeSteer={(note) =>
           detail.runLock.hold(runId, "steer", () => detail.handleResumeSteer(runId, note))
-        }
-        onRestartWaiting={(note) =>
-          detail.runLock.hold(runId, "steer", () => detail.handleRestartWaiting(runId, note))
-        }
-        onResumeWaiting={(note) =>
-          detail.runLock.hold(runId, "steer", () => detail.handleResumeWaiting(runId, note))
         }
         onRetryFailed={(note) =>
           detail.runLock.hold(runId, "steer", () => detail.handleRetryFailed(runId, note))

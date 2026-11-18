@@ -256,6 +256,12 @@ The coding-agent CLIs behind the AI providers (Pi, OpenCode, Claude Code, GitHub
 
 **Installed agents menu.** The menu on the AI Providers page reads the current state when it opens; nothing is pushed live. Each agent shows its installed version and one of: up to date; "will install automatically after <date>" while its cooldown runs; "held at a version after rollback". The "will install after" date is known after the first check following a start.
 
+## Background work and leftover processes
+
+ILD does not wait for processes an agent leaves running. Claude Code's own headless mode waits for work the agent **registered** as background work (Bash with `run_in_background`, Monitor, background subagents and workflows): the node keeps running while it does, the UI lists those tasks on the running node, and when they end the agent gets one more turn with the outcome. A process the agent started any other way (`&`, `nohup`) is not waited for, not listed and not stopped by ILD; it ends with the run's container. There is no ILD setting for the waits: the CLI's limits (30 minutes for a background command, a 10-minute idle cap for the rest) stay at their defaults, and the node's own timeout ends the launch and the tasks with it.
+
+An agent that registers a dev server as a background command and ends its turn therefore keeps the node running until that command reaches its limit, and holds its AI-provider slot meanwhile. Tell the agent to start servers it only needs for verification in the foreground and stop them, or not to register them. The other providers (Codex, OpenCode, Pi, GitHub Copilot) have no such wait. See [ADR-0041](adr/0041-the-wait-for-background-work-belongs-to-the-agent-cli.md).
+
 ## Graceful shutdown
 
 When ILD is asked to stop — `docker compose stop`, a Kubernetes rollout, a

@@ -42,6 +42,8 @@ public record LoopTemplateProposalsChangedPayload(Guid TemplateId);
 
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line, long Seq);
 
+public record BackgroundTasksChangedPayload(Guid RunId, Guid NodeId, IReadOnlyList<RunBackgroundTask> Tasks);
+
 public record PrSnapshotChangedPayload(Guid RunId);
 
 public record PrQueueChangedPayload(Guid RunId);

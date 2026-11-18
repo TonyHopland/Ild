@@ -49,10 +49,5 @@ public enum HaltReason
     /// </summary>
     GlobalVariableMissing = 4,
 
-    /// <summary>
-    /// The agent ended its turn while child processes it started (a long test run) were still running. ILD keeps the
-    /// session and worktree, leaves the children alone and waits for them (<c>ChildWaitService</c>), then resumes the
-    /// agent with how they ended. Not a request for a person: the human controls only Restart or Resume the node early.
-    /// </summary>
-    WaitingForChildren = 5,
+    // 5 was "waiting for the processes the agent left running"; ILD no longer waits for them, and the number is not reused.
 }

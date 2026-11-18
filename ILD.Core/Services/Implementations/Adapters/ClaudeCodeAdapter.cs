@@ -77,7 +77,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     protected override string StartHelp
         => "install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure the provider has its long-lived token (open the provider terminal).";
     protected override ILogger Logger => _logger;
-    protected override string? LaunchFingerprint => "--output-format stream-json";
 
     protected override CliAgentTurn CreateTurn(AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway)
         => new Turn(this, ctx, worktreePath, gateway);
@@ -141,7 +140,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
 
         public override async Task ReadStdoutAsync(StreamReader stdout)
-            => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel, TurnEnded);
+            => _stdout = await ReadStreamJsonAsync(stdout, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel, ctx.OnBackgroundTasks);
 
         public override StreamResult ParseStream() => _stdout!;
 
@@ -333,13 +332,19 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         Func<string, Task>? progressCallback,
         Action<string>? onSessionId,
         CancellationToken ct,
-        Func<Task>? onResult = null)
+        Func<IReadOnlyList<RunBackgroundTask>, Task>? onBackgroundTasks = null)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
         string? sessionId = null;
         string? errorMessage = null;
         var sawJsonEvents = false;
+        // A launch is one turn, or more when the CLI waits for background work and then gives the agent another turn (one `result`
+        // each). What the launch answered and whether it failed are those of its last turn. A turn ends at its `result`, but a launch that
+        // waited for a background subagent holds that `result` back until the follow-up turn has run, so the follow-up turn is also told
+        // by the `init` that opens it: text that arrives after either starts the next turn's answer.
+        var turnEnded = false;
+        var sawInit = false;
 
         while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
         {
@@ -381,13 +386,32 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             if (!TryGetString(root, "type", out var eventType))
                 continue;
 
-            if (string.Equals(eventType, "assistant", StringComparison.OrdinalIgnoreCase)
+            if (string.Equals(eventType, "system", StringComparison.OrdinalIgnoreCase))
+            {
+                TryGetString(root, "subtype", out var systemSubtype);
+                if (systemSubtype == "init")
+                {
+                    if (sawInit) turnEnded = true;
+                    sawInit = true;
+                }
+                else if (systemSubtype == "background_tasks_changed" && onBackgroundTasks is not null
+                    && root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
+                {
+                    await onBackgroundTasks(ReadBackgroundTasks(tasks)).ConfigureAwait(false);
+                }
+            }
+            else if (string.Equals(eventType, "assistant", StringComparison.OrdinalIgnoreCase)
                 && root.TryGetProperty("message", out var message)
                 && message.ValueKind == JsonValueKind.Object)
             {
                 var text = ExtractAssistantText(message);
                 if (!string.IsNullOrEmpty(text))
                 {
+                    if (turnEnded)
+                    {
+                        content.Clear();
+                        turnEnded = false;
+                    }
                     content.Append(text);
                     if (progressCallback is not null)
                         await progressCallback(text).ConfigureAwait(false);
@@ -403,9 +427,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             else if (string.Equals(eventType, "result", StringComparison.OrdinalIgnoreCase))
             {
-                if (onResult is not null) await onResult().ConfigureAwait(false);
+                turnEnded = true;
                 var isError = root.TryGetProperty("is_error", out var errFlag)
                     && errFlag.ValueKind == JsonValueKind.True;
+                // The last turn decides: a follow-up turn that went well answers for an earlier one that did not.
+                errorMessage = null;
                 if (isError && TryGetString(root, "result", out var errResult) && !string.IsNullOrWhiteSpace(errResult))
                     errorMessage = errResult;
                 else if (TryGetString(root, "subtype", out var subtype)
@@ -415,6 +441,21 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
 
         return new StreamResult(content.ToString(), sessionId, errorMessage, sawJsonEvents, raw.ToString());
+    }
+
+    /// <summary>The live set of a <c>background_tasks_changed</c> event, which always carries all of it.</summary>
+    private static List<RunBackgroundTask> ReadBackgroundTasks(JsonElement tasks)
+    {
+        var live = new List<RunBackgroundTask>();
+        foreach (var task in tasks.EnumerateArray())
+        {
+            if (task.ValueKind != JsonValueKind.Object) continue;
+            TryGetString(task, "task_type", out var kind);
+            TryGetString(task, "description", out var description);
+            TryGetString(task, "subagent_type", out var subagentType);
+            live.Add(new RunBackgroundTask(kind ?? "task", description ?? string.Empty, string.IsNullOrEmpty(subagentType) ? null : subagentType));
+        }
+        return live;
     }
 
     private static string? ExtractAssistantText(JsonElement message)

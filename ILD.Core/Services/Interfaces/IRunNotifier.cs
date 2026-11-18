@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Data.Enums;
 
 namespace ILD.Core.Services.Interfaces;
@@ -15,6 +16,9 @@ public interface IRunNotifier
     Task ResumedAsync(Guid runId);
     Task HaltedAsync(Guid runId);
     Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq);
+
+    /// <summary>The background work the node's agent CLI is waiting for changed; <paramref name="tasks"/> is the whole set now.</summary>
+    Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<RunBackgroundTask> tasks);
 
     /// <summary>The run's persisted PR snapshot was refreshed by the heartbeat poller.</summary>
     Task PrSnapshotChangedAsync(Guid runId);
@@ -37,6 +41,7 @@ public sealed class NoopRunNotifier : IRunNotifier
     public Task ResumedAsync(Guid runId) => Task.CompletedTask;
     public Task HaltedAsync(Guid runId) => Task.CompletedTask;
     public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
+    public Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<RunBackgroundTask> tasks) => Task.CompletedTask;
     public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
     public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
 }

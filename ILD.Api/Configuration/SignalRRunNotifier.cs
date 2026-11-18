@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Api.Hubs;
 using ILD.Data.DTOs.SignalRPayloads;
 using ILD.Data.Enums;
@@ -106,6 +107,19 @@ public class SignalRRunNotifier : IRunNotifier
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send NodeProgress for run {RunId} node {NodeId}", runId, nodeId);
+        }
+    }
+
+    public async Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<RunBackgroundTask> tasks)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("BackgroundTasksChanged", new BackgroundTasksChangedPayload(runId, nodeId, tasks));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send BackgroundTasksChanged for run {RunId} node {NodeId}", runId, nodeId);
         }
     }
 
