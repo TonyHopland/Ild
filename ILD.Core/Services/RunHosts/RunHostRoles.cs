@@ -33,6 +33,20 @@ public interface IRunLifecycle : IRunHostIdentity
 
     /// <summary>Remove what <see cref="CreateAsync"/> made. Never throws for what it finds there; the exception is a host that cannot be reached.</summary>
     Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default);
+
+    /// <summary>
+    /// Keep the run's worktree somewhere that outlives its pod or container (a commit of everything git does not ignore, as a hidden ref in the base
+    /// repository, never a branch on the remote), so a run whose pod is lost is made again with its work. Best effort: false when it could not be kept, null
+    /// when the host has no pod to lose or keeps no record to make one from.
+    /// </summary>
+    Task<bool?> CheckpointAsync(Guid runId, CancellationToken ct = default) => Task.FromResult<bool?>(null);
+
+    /// <summary>
+    /// Make the run's pod or container again when it no longer exists, on its volume if that survived and from its checkpoint if not. Returns what of
+    /// the run's work came back and what did not; null when the environment is there, or the host keeps nothing to make it from (commands in the run
+    /// then fail with <see cref="RunPodLostException"/>). Called before a node runs, never from inside a command: it holds the repository's lock.
+    /// </summary>
+    Task<string?> RecoverAsync(Guid runId, CancellationToken ct = default) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Which run or chat a path or a call belongs to, answered here once, by RunHolders; callers ask the host and never read a path themselves. The defaults are the path format alone (ADR-0032, ADR-0034); only a host that routes by it answers otherwise.</summary>

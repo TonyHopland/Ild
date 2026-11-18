@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -91,6 +92,19 @@ public class WorkItemPreviewTests
         Assert.Equal(new Refusal(PreviewRefusal.NoWorktree, "Work item does not currently have an active worktree."), refusal);
         Assert.Empty(h.Preview.Invocations);
         h.NoBroadcast();
+    }
+
+    [Fact]
+    public async Task A_lost_run_pod_behind_the_preview_is_a_pod_lost_refusal_with_the_lost_text_not_a_plain_refusal()
+    {
+        using var h = new Harness();
+        var lost = new RunPodLostException(Guid.NewGuid(), RunTermination.LostText("pod"));
+        h.Preview.Setup(p => p.GetStatusAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("could not run", lost));
+
+        var result = await h.Module.GetStatusAsync(h.Id);
+
+        AssertRefused(result, PreviewRefusal.PodLost, lost.Message);
+        Assert.IsType<Microsoft.AspNetCore.Mvc.ConflictObjectResult>(result.ToActionResult());
     }
 
     [Theory]

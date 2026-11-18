@@ -1829,6 +1829,320 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Single(_api.Names("persistentvolumeclaims"));
     }
 
+    // -- A run pod that is gone ------------------------------------------------------
+
+    [Fact]
+    public async Task A_run_whose_pod_was_deleted_is_made_again_on_its_surviving_volume_and_what_came_back_is_told()
+    {
+        await CreateRunAsync();
+        var claimName = _api.Get<V1Pod>("pods", Name(_run))!.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName;
+        var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        Assert.Empty(_api.Names("pods"));
+
+        var recovered = await _host.RecoverAsync(_run, ct);
+
+        var fresh = _api.Get<V1Pod>("pods", Name(_run))!;
+        Assert.Equal(claimName, fresh.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+        Assert.Contains("on the volume that survived", recovered);
+        Assert.Null(await _host.RecoverAsync(_run, ct));
+    }
+
+    [Fact]
+    public async Task A_command_in_a_run_pod_that_is_gone_says_so_and_does_not_make_the_pod_again()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+
+        var failure = await Assert.ThrowsAsync<RunPodLostException>(
+            () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct));
+
+        Assert.Equal(RunTermination.LostText("pod"), failure.Message);
+        Assert.DoesNotContain("404", failure.Message);
+        Assert.Empty(_api.Names("pods"));
+    }
+
+    [Fact]
+    public async Task A_run_with_no_record_of_what_it_was_made_from_is_not_made_again()
+    {
+        await CreateRunAsync();
+        var client = _api.Client();
+        var ct = TestContext.Current.CancellationToken;
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        await client.CoreV1.DeleteNamespacedConfigMapAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+
+        Assert.Null(await _host.RecoverAsync(_run, ct));
+        Assert.Empty(_api.Names("pods"));
+    }
+
+    [Fact]
+    public async Task A_checkpoint_of_a_run_whose_pod_is_gone_keeps_nothing_and_runs_nothing()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        var commands = 0;
+        _api.OnExec = async e =>
+        {
+            commands++;
+            await e.ExitAsync(0);
+        };
+
+        Assert.Null(await _host.CheckpointAsync(_run, ct));
+        Assert.Equal(0, commands);
+        Assert.Empty(_api.Names("pods"));
+    }
+
+    [Fact]
+    public async Task The_request_a_run_was_made_from_is_kept_in_its_owner_so_a_lost_pod_can_be_made_again()
+    {
+        await CreateRunAsync();
+
+        var owner = _api.Get<V1ConfigMap>("configmaps", Name(_run))!;
+
+        var request = KubernetesManifests.RequestOf(_run, owner);
+        Assert.Equal("ild/wi-1-run", request!.BranchName);
+        Assert.Equal(Repo, request.RepositoryId);
+    }
+
+    // -- A run with an active work item is never taken down --------------------------
+
+    [Fact]
+    public async Task The_sweep_and_the_startup_listing_leave_the_pods_of_runs_that_are_halted_failed_or_waiting_alone_and_take_a_deleted_runs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var halted = Guid.NewGuid();
+        var failed = Guid.NewGuid();
+        var waiting = Guid.NewGuid();
+        var deleted = Guid.NewGuid();
+        foreach (var run in new[] { halted, failed, waiting, deleted }) SeedRun(run, Instance);
+        // The ones the database still has: everything but Completed and Cancelled.
+        var host = new KubernetesRunHost(_api.Client(), Options(), FakeKubernetesApi.Namespace, new ProcessRunner(), _log)
+        {
+            RetainedRuns = _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid> { halted, failed, waiting }),
+        };
+
+        var listed = await host.ListLeftoversAsync(new HashSet<Guid>(), ct);
+        await new RunHostSweeper(new RoutingRunHost(FakeLocal(), host), _ => Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>())).SweepAsync(host, ct);
+
+        Assert.Equal([Name(deleted).Replace("ild-run-", "")], listed.Select(l => l.Location.Replace("ild-run-", "")));
+        Assert.Equal(new[] { Name(failed), Name(halted), Name(waiting) }.Order(), _api.Names("pods").Order());
+    }
+
+    private static (int Code, byte[] Out, string Err) RunLocal(string script, byte[]? stdin, params string[] args)
+    {
+        var psi = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = stdin is not null };
+        foreach (var a in new[] { "-c", script, "bash" }.Concat(args)) psi.ArgumentList.Add(a);
+        psi.Environment["GIT_AUTHOR_NAME"] = psi.Environment["GIT_COMMITTER_NAME"] = "T";
+        psi.Environment["GIT_AUTHOR_EMAIL"] = psi.Environment["GIT_COMMITTER_EMAIL"] = "t@example.test";
+        using var p = Process.Start(psi)!;
+        var err = p.StandardError.ReadToEndAsync();
+        if (stdin is not null) { p.StandardInput.BaseStream.Write(stdin); p.StandardInput.Close(); }
+        using var output = new MemoryStream();
+        p.StandardOutput.BaseStream.CopyTo(output);
+        p.WaitForExit();
+        return (p.ExitCode, output.ToArray(), err.Result);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_and_volume_were_deleted_is_made_again_and_gets_its_commits_and_edits_back_from_its_checkpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        const string Branch = "ild/wi-1-run";
+        // What the run did in its pod: a commit, an edit to a tracked file and a new file.
+        var podClone = Path.Combine(_scratch, "pod");
+        Git(_scratch, "clone", "-q", baseRepo, podClone);
+        Git(podClone, "checkout", "-q", "-b", Branch);
+        File.WriteAllText(Path.Combine(podClone, "work.txt"), "committed");
+        Git(podClone, "add", "-A");
+        Git(podClone, "-c", "user.email=t@example.test", "-c", "user.name=T", "commit", "-q", "-m", "work");
+        File.WriteAllText(Path.Combine(podClone, "a.txt"), "edited");
+        File.WriteAllText(Path.Combine(podClone, "new.txt"), "untracked");
+        var head = Process.Start(new ProcessStartInfo("git", ["-C", podClone, "rev-parse", "HEAD"]) { RedirectStandardOutput = true })!;
+        var committed = (await head.StandardOutput.ReadToEndAsync(ct)).Trim();
+
+        // The new pod: a clone of the base, as the host makes it; the host's scripts run for real against these two directories.
+        var newClone = Path.Combine(_scratch, "again");
+        Git(_scratch, "clone", "-q", baseRepo, newClone);
+        byte[]? restoreBundle = null;
+        _api.OnExec = async e =>
+        {
+            var script = e.Command.FirstOrDefault(c => c == ExecRunHost.CheckpointScript || c == ExecRunHost.RestoreScript);
+            if (script is null)
+            {
+                if (e.WantsStdin) await e.ReadStdinToEndAsync();
+                await e.ExitAsync(0);
+                return;
+            }
+            var tail = e.Command.SkipWhile(c => c != "bash").Skip(1).ToArray();
+            if (script == ExecRunHost.CheckpointScript)
+            {
+                var (code, bundle, _) = RunLocal(script, null, podClone);
+                await e.WriteStdoutBytesAsync(bundle);
+                await e.ExitAsync(code);
+            }
+            else
+            {
+                restoreBundle = await e.ReadStdinToEndAsync();
+                var (code, _, err) = RunLocal(script, restoreBundle, [newClone, .. tail.Skip(1)]);
+                await e.WriteStderrAsync(err);
+                await e.ExitAsync(code);
+            }
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, Branch, Repo), ct);
+
+        Assert.True(await _host.CheckpointAsync(_run, ct));
+
+        // The pod and its volume are deleted; the run's record in its ConfigMap is not.
+        var client = _api.Client();
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        await client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        _api.ForgetCheckout(Name(_run));
+        var recovered = await _host.RecoverAsync(_run, ct);
+
+        Assert.NotEmpty(restoreBundle!);
+        Assert.Equal(committed, GitOut(newClone, "rev-parse", "HEAD"));
+        Assert.Equal(Branch, GitOut(newClone, "rev-parse", "--abbrev-ref", "HEAD"));
+        Assert.Equal("committed", File.ReadAllText(Path.Combine(newClone, "work.txt")));
+        Assert.Equal("edited", File.ReadAllText(Path.Combine(newClone, "a.txt")));
+        Assert.Equal("untracked", File.ReadAllText(Path.Combine(newClone, "new.txt")));
+        Assert.Contains("restored from the last checkpoint", recovered);
+        Assert.Null(await _host.RecoverAsync(_run, ct));
+    }
+
+    [Fact]
+    public async Task A_checkpoint_is_not_given_to_another_run_and_goes_when_the_sweep_takes_its_run()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        var podClone = Path.Combine(_scratch, "pod");
+        Git(_scratch, "clone", "-q", baseRepo, podClone);
+        File.WriteAllText(Path.Combine(podClone, "new.txt"), "untracked");
+        byte[]? given = null;
+        _api.OnExec = async e =>
+        {
+            if (e.Command.Contains(ExecRunHost.CheckpointScript))
+            {
+                var (code, bundle, _) = RunLocal(ExecRunHost.CheckpointScript, null, podClone);
+                await e.WriteStdoutBytesAsync(bundle);
+                await e.ExitAsync(code);
+                return;
+            }
+            var stdin = e.WantsStdin ? await e.ReadStdinToEndAsync() : null;
+            if (e.Command.Contains(ILD.Core.Services.RunHosts.Local.LocalRunHost.CloneScript)) given = stdin;
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+        Assert.True(await _host.CheckpointAsync(_run, ct));
+        Assert.Contains(_run.ToString("N"), GitOut(baseRepo, "for-each-ref", "refs/ild/runs"));
+
+        await _host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), baseRepo, "ild/wi-2-run", Repo), ct);
+
+        var bundleFile = Path.Combine(_scratch, "given.bundle");
+        File.WriteAllBytes(bundleFile, given!);
+        Assert.DoesNotContain("refs/ild/", GitOut(baseRepo, "bundle", "list-heads", bundleFile));
+
+        foreach (var leftover in await _host.ListLeftoversAsync(new HashSet<Guid>(), ct))
+            await _host.DeleteLeftoverAsync(leftover, ct);
+
+        Assert.Empty(_api.Names("pods"));
+        Assert.Equal("", GitOut(baseRepo, "for-each-ref", "refs/ild/runs"));
+    }
+
+    private static string GitOut(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, RedirectStandardOutput = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        var text = p.StandardOutput.ReadToEnd().Trim();
+        p.WaitForExit();
+        return text;
+    }
+
+    [Fact]
+    public async Task A_command_that_meets_the_pod_missing_again_while_it_is_being_made_fails_instead_of_waiting_on_the_repository_lock_its_caller_holds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+        var client = _api.Client();
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        // The pod made again is gone by the time its first command runs in it.
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+            await e.ExitAsync(0);
+        };
+
+        // As the Start node does: the repository's lock held around the creation.
+        using var held = await ILD.Core.Services.Implementations.BaseRepoClone.LockAsync(Repo, ct);
+        var create = _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+
+        await Assert.ThrowsAsync<RunPodLostException>(() => create.WaitAsync(TimeSpan.FromSeconds(20), ct));
+    }
+
+    [Fact]
+    public async Task A_run_made_before_its_request_was_kept_is_given_the_request_when_its_start_meets_its_existing_owner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _api.Seed("configmaps", Name(_run), Instance, _run);
+        Assert.Null(KubernetesManifests.RequestOf(_run, _api.Get<V1ConfigMap>("configmaps", Name(_run))!));
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), ct);
+
+        Assert.Contains($"configmaps/{Name(_run)}", _api.Patched);
+        Assert.Equal("ild/wi-1-run", KubernetesManifests.RequestOf(_run, _api.Get<V1ConfigMap>("configmaps", Name(_run))!)!.BranchName);
+    }
+
+    [Fact]
+    public async Task Run_pods_go_to_the_nodes_chosen_and_stay_longer_on_a_node_that_is_not_ready_when_asked()
+    {
+        var host = NewHost(Options() with { RunNodeSelector = new Dictionary<string, string> { ["ild/runs"] = "yes" }, RunTolerationSeconds = 1800 });
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Equal("yes", spec.NodeSelector["ild/runs"]);
+        Assert.All(spec.Tolerations, t => Assert.Equal(1800, t.TolerationSeconds));
+        Assert.Equal(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"], spec.Tolerations.Select(t => t.Key).Order());
+    }
+
+    [Fact]
+    public void The_run_node_selector_and_toleration_are_read_from_settings_and_malformed_ones_stop_startup()
+    {
+        KubernetesRunHostOptions From(string? selector, string? seconds) => KubernetesRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_K8S_RUNNER_IMAGE" => "img",
+            "ILD_K8S_RUN_NODE_SELECTOR" => selector,
+            "ILD_K8S_RUN_TOLERATION_SECONDS" => seconds,
+            _ => null,
+        });
+
+        var options = From("pool=runs,size=large", "900");
+        Assert.Equal("runs", options.RunNodeSelector["pool"]);
+        Assert.Equal(900, options.RunTolerationSeconds);
+        Assert.Empty(From(null, null).RunNodeSelector);
+        Assert.Null(From(null, null).RunTolerationSeconds);
+        Assert.Throws<InvalidOperationException>(() => From("nonsense", null));
+        Assert.Throws<InvalidOperationException>(() => From(null, "-5"));
+    }
+
     // -- Installers left by a crash ------------------------------------------------
 
     [Fact]

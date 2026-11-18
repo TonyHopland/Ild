@@ -475,10 +475,10 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     [Fact]
     public async Task A_command_for_a_container_that_is_gone_says_so_instead_of_hanging()
     {
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<RunPodLostException>(
             () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "ls"), _run), TestContext.Current.CancellationToken));
 
-        Assert.Contains("could not run a command in the container", ex.Message);
+        Assert.Contains("The run container no longer exists", ex.Message);
     }
 
     // -- The direct route (network mode Off) -------------------------------------

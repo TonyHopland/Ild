@@ -1,4 +1,4 @@
-# ADR-0040: The wait for background work belongs to the agent CLI
+# ADR-0041: The wait for background work belongs to the agent CLI
 
 ILD used to look, when an agent's turn ended, for every process the agent had started that was still alive, park the node as "Waiting for ILD" until they had all ended, and wake the agent with a message about them. A dev server left over from verification (`npm exec vite`, `esbuild --service`) therefore held a work item for the whole wait although the agent never meant to wait for it.
 

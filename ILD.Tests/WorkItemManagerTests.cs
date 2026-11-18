@@ -2723,6 +2723,7 @@ public class WorkItemManagerTests
         "unknown provider type",
         "ssh clone url",
         "git fails",
+        "run pod lost",
     };
 
     [Theory]
@@ -2778,9 +2779,15 @@ public class WorkItemManagerTests
                     repoMgr.Setup(r => r.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()))
                         .ThrowsAsync(new InvalidOperationException("git exploded"));
                     break;
+                case "run pod lost":
+                    repoMgr.Setup(r => r.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()))
+                        .ThrowsAsync(new ILD.Core.Services.RunHosts.RunPodLostException(Guid.NewGuid(), "The run pod no longer exists and could not be made again."));
+                    break;
             }
 
             Assert.Null(await mgr.GetBranchUrlAsync(view));
+            // The item still opens, and says why its worktree cannot be read.
+            Assert.Equal(scenario == "run pod lost", view.WorktreeProblem is not null);
         }
         finally
         {

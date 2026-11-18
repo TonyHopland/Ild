@@ -115,6 +115,8 @@ export interface WorkItem {
    * and only once the branch has been pushed. Null or absent otherwise.
    */
   branchUrl?: string | null;
+  /** Why the run's worktree cannot be read, when its pod is gone. Null or absent otherwise. */
+  worktreeProblem?: string | null;
   dependencyIds: string[];
   dependentIds: string[];
   isPreviewRunning?: boolean;

@@ -516,6 +516,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     workItemId: string;
     branchName: string | null | undefined;
     url: string | null;
+    problem: string | null;
   } | null>(null);
   const branchLinkGeneration = useRef(0);
   const [pushCount, setPushCount] = useState(0);
@@ -532,6 +533,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
           workItemId,
           branchName: read.branchName,
           url: read.branchUrl ?? null,
+          problem: read.worktreeProblem ?? null,
         });
       })
       .catch(() => {
@@ -555,6 +557,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     (branchLink.url.startsWith("https://") || branchLink.url.startsWith("http://"))
       ? branchLink.url
       : null;
+
+  const worktreeProblem =
+    branchLink?.workItemId === workItem?.id ? (branchLink?.problem ?? null) : null;
 
   // Commit all changes and push the branch to origin — for keeping work from
   // a loop that has no PR node. Mirrors the preview action shape.
@@ -1112,6 +1117,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     pushBranchMessage,
     handlePushBranch,
     branchUrl,
+    worktreeProblem,
     pullBranchLoading,
     pullBranchError,
     pullBranchMessage,

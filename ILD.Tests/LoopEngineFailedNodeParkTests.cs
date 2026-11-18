@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
@@ -190,6 +191,88 @@ public class LoopEngineFailedNodeParkTests
 
         Assert.Equal(2, agent.Invocations);
         Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == h.NodesById["b"].Id && n.Status == LoopRunNodeStatus.Succeeded);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_is_gone_while_a_node_waits_on_it_is_parked_on_that_node_with_the_lost_pod_reason_and_the_wait_is_cut_off()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        var blocking = new BlockingExecutor(NodeType.AI);
+        h.Registry.Register(blocking);
+        h.SeedRun("a");
+        await h.LaunchAsync();
+        await blocking.Entered;
+
+        await h.Engine.ParkRunOnLostPodAsync(h.RunId, new RunTermination(RunTerminationKind.PodLost));
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
+        var node = Assert.Single(h.ReloadRunNodes());
+        Assert.Equal(LoopRunNodeStatus.Failed, node.Status);
+        Assert.Contains("no longer exists", node.Error);
+        Assert.Single(Events(h, EventType.RunContainerEnded));
+        VerifyItemMovedTo(h, RemoteWorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_is_gone_is_parked_without_a_failed_checkpoint_being_told()
+    {
+        var host = new Mock<IRunLifecycle>();
+        host.Setup(m => m.CheckpointAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((bool?)null);
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(host.Object));
+        h.AddNode("a", NodeType.AI, "Agent");
+        var blocking = new BlockingExecutor(NodeType.AI);
+        h.Registry.Register(blocking);
+        h.SeedRun("a");
+        await h.LaunchAsync();
+        await blocking.Entered;
+
+        await h.Engine.ParkRunOnLostPodAsync(h.RunId, new RunTermination(RunTerminationKind.PodLost));
+        await h.WaitUntilIdleAsync();
+
+        Assert.Empty(Events(h, EventType.CheckpointFailed));
+        Assert.Equal(LoopRunNodeStatus.Failed, Assert.Single(h.ReloadRunNodes()).Status);
+    }
+
+    [Fact]
+    public async Task A_cancelled_run_is_not_checkpointed_while_its_environment_is_being_removed()
+    {
+        var host = new Mock<IRunLifecycle>();
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(host.Object));
+        h.AddNode("a", NodeType.AI, "Agent");
+        var blocking = new BlockingExecutor(NodeType.AI);
+        h.Registry.Register(blocking);
+        h.SeedRun("a");
+        await h.LaunchAsync();
+        await blocking.Entered;
+
+        await h.Engine.CancelRunAsync(h.RunId);
+        await h.WaitUntilIdleAsync();
+
+        host.Verify(m => m.CheckpointAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_run_whose_pod_was_lost_gets_it_made_again_before_its_node_runs_and_what_came_back_is_an_event_on_the_run()
+    {
+        var host = new Mock<IRunLifecycle>();
+        host.Setup(m => m.RecoverAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync("The run pod no longer existed and was made again: all of it is back.");
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(host.Object));
+        h.AddNode("a", NodeType.Cmd, "Tests");
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("dotnet test"),
+            new NodeOutcome.Terminal("passed")));
+        h.SeedRun("a").WorktreePath = "/work/run";
+        h.Db.Context.SaveChanges();
+
+        await h.LaunchAsync();
+        await h.WaitUntilIdleAsync();
+
+        Assert.Single(Events(h, EventType.RunRecovered));
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
     }
 

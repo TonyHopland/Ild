@@ -16,6 +16,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "persistentvolumeclaims", "configmaps"]
     verbs: ["create", "get", "list", "delete"]
+  # A run started before ILD kept what it was made from in its ConfigMap is given that record, so its lost pod can be made again.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["patch"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]

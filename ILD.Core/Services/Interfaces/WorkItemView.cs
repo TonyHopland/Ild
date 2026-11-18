@@ -88,6 +88,9 @@ public sealed class WorkItemView
     /// remote-tracking ref and the repository's forge type gives an exact link.
     /// </summary>
     public string? BranchUrl { get; set; }
+
+    /// <summary>Why the run's worktree cannot be read, when its pod is gone and could not be made again: the item still opens, and a retry of the run's node can make the pod again. Null otherwise.</summary>
+    public string? WorktreeProblem { get; set; }
     public string? PrUrl { get; set; }
     public bool IsPrMerged { get; set; }
     public string? HumanFeedbackReason { get; set; }

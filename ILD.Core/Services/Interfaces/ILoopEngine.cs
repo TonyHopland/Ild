@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -79,6 +80,12 @@ public interface ILoopEngine
     /// <c>Running</c> on an AI node (guards the halt-races-completion case).
     /// </summary>
     Task HaltRunAsync(Guid runId);
+
+    /// <summary>
+    /// A run's pod or container is gone while the run is <c>Running</c>: fail the node it was on and park the run as Node Failed, with
+    /// <paramref name="ended"/> as the reason, and cut off whatever the loop is waiting on. No-op for a run that is not Running.
+    /// </summary>
+    Task ParkRunOnLostPodAsync(Guid runId, RunTermination ended);
 
     /// <summary>
     /// Resume a halted run, optionally steering it with <paramref name="note"/>

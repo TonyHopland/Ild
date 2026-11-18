@@ -134,6 +134,18 @@ public sealed partial class WorktreeInspector : IWorktreeInspector
 
     private async Task<WorktreeReadResult> WithWorktreeAsync(string workItemId, Func<Target, Task<WorktreeReadResult>> read)
     {
+        try
+        {
+            return await ReadInWorktreeAsync(workItemId, read);
+        }
+        catch (Exception ex) when (RunPodLostException.In(ex) is { } lost)
+        {
+            return new WorktreeReadResult(WorktreeReadOutcome.NoWorktree, lost.Message);
+        }
+    }
+
+    private async Task<WorktreeReadResult> ReadInWorktreeAsync(string workItemId, Func<Target, Task<WorktreeReadResult>> read)
+    {
         var workItem = await _workItems.GetWorkItemAsync(workItemId);
         if (workItem is null)
             return new WorktreeReadResult(WorktreeReadOutcome.WorkItemNotFound, "Work item not found.");
