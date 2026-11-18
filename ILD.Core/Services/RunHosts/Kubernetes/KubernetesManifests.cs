@@ -46,6 +46,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
             .Concat(request is null ? [] : RequestData(request)).ToDictionary(p => p.Key, p => p.Value),
     };
 
+    /// <summary>The merge patch that gives an owner made before the request was kept the request.</summary>
+    public static V1Patch RequestPatch(RunEnvironmentRequest request)
+        => new(new { data = RequestData(request).ToDictionary(p => p.Key, p => p.Value) }, V1Patch.PatchType.MergePatch);
+
     private static IEnumerable<KeyValuePair<string, string>> RequestData(RunEnvironmentRequest request) =>
     [
         new("basePath", request.BasePath), new("branch", request.BranchName), new("repository", request.RepositoryId.ToString("D")),
@@ -249,6 +253,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     {
         var pod = BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
         pod.Metadata.Annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = "false" };
+        if (options.RunNodeSelector.Count > 0) pod.Spec.NodeSelector = options.RunNodeSelector.ToDictionary(p => p.Key, p => p.Value);
+        if (options.RunTolerationSeconds is { } seconds)
+            pod.Spec.Tolerations = new[] { "node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable" }
+                .Select(key => new V1Toleration { Key = key, OperatorProperty = "Exists", Effect = "NoExecute", TolerationSeconds = seconds }).ToList();
         return pod;
     }
 

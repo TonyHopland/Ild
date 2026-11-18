@@ -182,7 +182,20 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
         {
-            return (await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(owner), _namespace, cancellationToken: ct), false);
+            var existing = await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(owner), _namespace, cancellationToken: ct);
+            // A run made before the request was kept has none: it is given the one the engine has just passed, so its pod can be made again.
+            if (KubernetesManifests.RequestOf(owner, existing) is null)
+            {
+                try
+                {
+                    existing = await _client.CoreV1.PatchNamespacedConfigMapAsync(KubernetesManifests.RequestPatch(request), RunNames.Run(owner), _namespace, cancellationToken: ct);
+                }
+                catch (HttpOperationException patchFailure)
+                {
+                    Logger?.LogWarning(patchFailure, "Could not record what run {Run} was made from (ILD's Role needs the patch verb on configmaps); a lost pod of it cannot be made again", owner);
+                }
+            }
+            return (existing, false);
         }
     }
 

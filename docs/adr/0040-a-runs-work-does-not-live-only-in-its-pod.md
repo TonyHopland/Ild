@@ -16,3 +16,28 @@ Work item 696 lost every unpushed change when its run pod disappeared; a retry t
 - **Verified.** `KubernetesRunHostTests` deletes a run's pod and volume after a checkpoint and starts a command: the pod is made again and the checkout is restored from the checkpoint with the real scripts, with its commit, edit and untracked file back.
 - **Not done: reading the pushed branch.** The worktree tools and preview report a lost pod, but do not yet fall back to reading the run's pushed branch when there is one.
 - **Not done: the Docker host.** It keeps no record of a run's request to make a container from and checkpoints nothing; a missing container is reported as lost, and a stopped one is still started again (as before).
+
+## Root cause of work item 696's pod loss
+
+From cluster metrics and logs, 17 Nov (UTC). It was not an ILD action.
+
+- The run pod requested 256Mi of memory with a 6Gi limit and was scheduled on the smallest node (8 GiB; the others have 16 GiB), next to the database and other workloads.
+- 18:08-18:38: the run pod grew from 0.14 to 4.0 GiB while the node's available memory fell from 1.8 to 0.5 GiB.
+- 18:39: the node went NotReady and got the unreachable taint. The database on it stalled; that is the "transient failure" that failed the Develop node at 18:41.
+- 18:44: the default 300 s toleration expired and the taint manager deleted every pod on the node. ILD and the database came back through their controllers. The run pod is a bare pod, so nothing made it again.
+- 18:45 on: startup reconciliation and orphan recovery met the exec 404 every minute, which is why the run stayed Running.
+- No node reboot, no OOM kill, and no ILD sweep or idle cleanup was involved. The run's volume claim and ConfigMap survived until the replacement run started and ILD deleted the old run's environment: the work was lost by that cleanup, not with the pod.
+
+### What protects a run pod from a NotReady node, and what does not
+
+- **Does not:** the cluster-autoscaler `safe-to-evict` annotation (it only governs autoscaler drains, not taint-based eviction), and the memory limit (the node failed under the sum of its workloads, not on an OOM kill).
+- **Reduces the odds:** `ILD_K8S_RUN_NODE_SELECTOR` keeps runs off the node that holds the database; the default memory request is now 1Gi, so the scheduler no longer counts a growing run as nearly free; `ILD_K8S_RUN_TOLERATION_SECONDS` lets a pod stay longer on a node that may come back.
+- **What actually saves the work:** nothing stops a node from being lost. The pod is made again on its surviving volume (the claim and its ConfigMap outlive the pod), and the checkpoint covers a lost volume.
+- **Existing runs:** a run made before this version gets its record patched into its ConfigMap when its start meets it; this needs the `patch` verb on `configmaps` in ILD's Role (`docs/kubernetes/role.yaml`). Without it ILD warns and such a run is reported as lost, as before.
+
+### Follow-ups, not in this change
+
+- A plain read (a GET) can make a pod again, waiting on the repository lock inside the request.
+- A checkpoint on the cancel path can race the removal of the run's environment.
+- Checkpoint refs are removed only when the run's environment is deleted, not on the sweep's teardown; a new run's checkout bundles every ref, including other runs' checkpoints. Exclude `refs/ild/` from that bundle and remove the ref on every teardown.
+- The checkpoint script rebuilds its index from `HEAD`, so `git add -A` rehashes every tracked file; seed it from the run's own index.

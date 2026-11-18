@@ -1336,19 +1336,26 @@ public class WorkItemManager : IWorkItemManager
         return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
     }
 
+    private static RunPodLostException? FindPodLost(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is RunPodLostException lost) return lost;
+        return null;
+    }
+
     public async Task<string?> GetBranchUrlAsync(WorkItemView workItem)
     {
         // No run-id fallback for the branch, unlike ResolveBranchContextAsync:
         // the link must open the branch the Overview names.
         var branch = workItem.BranchName;
         var worktreePath = workItem.WorktreePath;
-        if (string.IsNullOrWhiteSpace(branch)
-            || string.IsNullOrWhiteSpace(worktreePath) || !await _runHost.DirectoryExistsAsync(worktreePath)
-            || workItem.RunRepositoryId is not { } repositoryId)
+        if (string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(worktreePath) || workItem.RunRepositoryId is not { } repositoryId)
             return null;
 
         try
         {
+            if (!await _runHost.DirectoryExistsAsync(worktreePath))
+                return null;
             var repo = await _providerStore.GetRepositoryByIdAsync(repositoryId);
             if (repo is null)
                 return null;
@@ -1359,6 +1366,12 @@ public class WorkItemManager : IWorkItemManager
                 return null;
 
             return BranchWebUrl.For(remoteProvider.Type, repo.CloneUrl, branch);
+        }
+        catch (Exception ex) when (FindPodLost(ex) is { } lost)
+        {
+            // The item still opens: the run's node can be retried, which makes the pod again.
+            workItem.WorktreeProblem = lost.Message;
+            return null;
         }
         catch (Exception ex)
         {

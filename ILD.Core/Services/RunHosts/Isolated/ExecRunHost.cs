@@ -516,7 +516,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested) await RememberEndingAsync(owner.Id, ct);
-            if (!await ReviveRunAsync(owner.Id, ex, ct))
+            if (Making.Value || !await ReviveRunAsync(owner.Id, ex, ct))
             {
                 if (!ct.IsCancellationRequested && !(await ReadRunStateAsync(owner.Id, ct)).Found)
                     throw new RunPodLostException(owner.Id, RunTermination.LostText(Noun));
@@ -546,11 +546,29 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
         => (await CreateCoreAsync(request, ct)).Environment;
 
+    // Set while a pod or container is being made: a command inside that meets it missing again fails, and does not revive. A revive makes the
+    // environment again under the repository's lock, which the start of a run (or the recreation itself) already holds, and the lock is not reentrant.
+    private static readonly AsyncLocal<bool> Making = new();
+
     private async Task<(RunEnvironment Environment, RunCheckout Checkout)> CreateCoreAsync(RunEnvironmentRequest request, CancellationToken ct)
+    {
+        var was = Making.Value;
+        Making.Value = true;
+        try
+        {
+            return await MakeCoreAsync(request, ct);
+        }
+        finally
+        {
+            Making.Value = was;
+        }
+    }
+
+    private async Task<(RunEnvironment Environment, RunCheckout Checkout)> MakeCoreAsync(RunEnvironmentRequest request, CancellationToken ct)
     {
         var owner = request.OwnerId;
         var environment = new RunEnvironment(owner, RunPaths.WorkingDirectory(owner));
-        if (await IsRunReadyAsync(owner, ct)) return (environment, RunCheckout.Kept);
+        if (await IsRunReadyAsync(owner, ct)) return (environment, RunCheckout.AlreadyThere);
 
         var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
         await RememberEndingAsync(owner, ct);
@@ -943,6 +961,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>How a run's worktree came to be when its environment was made.</summary>
     protected enum RunCheckout
     {
+        /// <summary>The pod or container was already running as one made now would be: nothing was made, so there is nothing to report.</summary>
+        AlreadyThere,
         /// <summary>It was already there: the run's volume survived, with every commit and edit on it.</summary>
         Kept,
         /// <summary>It was put back from the checkpoint kept outside the pod: commits and the edits of the last checkpoint.</summary>
@@ -966,6 +986,8 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         // As the start of a run does: the base repository is held while its branches are bundled into the new checkout.
         using var _ = await BaseRepoClone.LockAsync(request.RepositoryId, ct);
         var (_, checkout) = await CreateCoreAsync(request, ct);
+        // A caller that queued behind the one that made it finds it ready: only the one that made it has anything to say.
+        if (checkout == RunCheckout.AlreadyThere) return true;
         var recovered = checkout switch
         {
             RunCheckout.Kept => "its worktree was on the volume that survived, so its commits and uncommitted edits are back",
@@ -973,7 +995,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             _ => "its volume was gone too and no checkpoint was kept; the worktree was checked out again from the base repository, and commits and edits the run had not pushed are lost",
         };
         var note = $"The run {Noun} no longer existed and was made again: {recovered}.";
-        _recoveryNotes[run] = note;
+        _recoveryNotes.AddOrUpdate(run, note, (_, earlier) => $"{earlier} {note}");
         Logger?.LogWarning("Run {Run}: {Note}", run, note);
         return true;
     }

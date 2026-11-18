@@ -1980,8 +1980,9 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
         await client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
         _api.ForgetCheckout(Name(_run));
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
-        await process.WaitForExitAsync(ct);
+        // The UI polls several endpoints at once: every caller that meets the missing pod queues on the one that makes it.
+        var processes = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct)));
+        foreach (var process in processes) { await process.WaitForExitAsync(ct); process.Dispose(); }
 
         Assert.NotEmpty(restoreBundle!);
         Assert.Equal(committed, GitOut(newClone, "rev-parse", "HEAD"));
@@ -1991,6 +1992,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal("untracked", File.ReadAllText(Path.Combine(newClone, "new.txt")));
         var note = _host.TakeRecoveryNote(_run);
         Assert.Contains("restored from the last checkpoint", note);
+        Assert.DoesNotContain("survived", note);
         Assert.Null(_host.TakeRecoveryNote(_run));
     }
 
@@ -2002,6 +2004,86 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var text = p.StandardOutput.ReadToEnd().Trim();
         p.WaitForExit();
         return text;
+    }
+
+    [Fact]
+    public async Task A_command_that_meets_the_pod_missing_again_while_it_is_being_made_fails_instead_of_waiting_on_the_repository_lock_its_caller_holds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+        var client = _api.Client();
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        // The pod made again is gone by the time its first command runs in it.
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+            await e.ExitAsync(0);
+        };
+
+        // As the Start node does: the repository's lock held around the creation.
+        using var held = await ILD.Core.Services.Implementations.BaseRepoClone.LockAsync(Repo, ct);
+        var create = _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+
+        await Assert.ThrowsAsync<RunPodLostException>(() => create.WaitAsync(TimeSpan.FromSeconds(20), ct));
+    }
+
+    [Fact]
+    public async Task A_run_made_before_its_request_was_kept_is_given_the_request_when_its_start_meets_its_existing_owner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _api.Seed("configmaps", Name(_run), Instance, _run);
+        Assert.Null(KubernetesManifests.RequestOf(_run, _api.Get<V1ConfigMap>("configmaps", Name(_run))!));
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), ct);
+
+        Assert.Contains($"configmaps/{Name(_run)}", _api.Patched);
+        Assert.Equal("ild/wi-1-run", KubernetesManifests.RequestOf(_run, _api.Get<V1ConfigMap>("configmaps", Name(_run))!)!.BranchName);
+    }
+
+    [Fact]
+    public async Task Run_pods_go_to_the_nodes_chosen_and_stay_longer_on_a_node_that_is_not_ready_when_asked()
+    {
+        var host = NewHost(Options() with { RunNodeSelector = new Dictionary<string, string> { ["ild/runs"] = "yes" }, RunTolerationSeconds = 1800 });
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            await e.ExitAsync(0);
+        };
+
+        await host.CreateAsync(new RunEnvironmentRequest(_run, MakeBaseRepository(), "ild/wi-1-run", Repo), TestContext.Current.CancellationToken);
+
+        var spec = _api.Get<V1Pod>("pods", Name(_run))!.Spec;
+        Assert.Equal("yes", spec.NodeSelector["ild/runs"]);
+        Assert.All(spec.Tolerations, t => Assert.Equal(1800, t.TolerationSeconds));
+        Assert.Equal(["node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"], spec.Tolerations.Select(t => t.Key).Order());
+    }
+
+    [Fact]
+    public void The_run_node_selector_and_toleration_are_read_from_settings_and_malformed_ones_stop_startup()
+    {
+        KubernetesRunHostOptions From(string? selector, string? seconds) => KubernetesRunHostOptions.From(name => name switch
+        {
+            "ILD_API_URL" => "http://ild.example:8080",
+            "ILD_K8S_RUNNER_IMAGE" => "img",
+            "ILD_K8S_RUN_NODE_SELECTOR" => selector,
+            "ILD_K8S_RUN_TOLERATION_SECONDS" => seconds,
+            _ => null,
+        });
+
+        var options = From("pool=runs,size=large", "900");
+        Assert.Equal("runs", options.RunNodeSelector["pool"]);
+        Assert.Equal(900, options.RunTolerationSeconds);
+        Assert.Empty(From(null, null).RunNodeSelector);
+        Assert.Null(From(null, null).RunTolerationSeconds);
+        Assert.Throws<InvalidOperationException>(() => From("nonsense", null));
+        Assert.Throws<InvalidOperationException>(() => From(null, "-5"));
     }
 
     // -- Installers left by a crash ------------------------------------------------
@@ -2058,7 +2140,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(seen);
         var resources = Installer(Assert.Single(_installerPods.Keys)).Spec.Containers.Single().Resources;
         Assert.Equal("100m", resources.Requests["cpu"].ToString());
-        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
+        Assert.Equal("1Gi", resources.Requests["memory"].ToString());
         Assert.Null(resources.Limits);
     }
 
@@ -2132,7 +2214,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var pod = _api.Get<V1Pod>("pods", SignInPod())!;
         var resources = pod.Spec.Containers.Single().Resources;
         Assert.Equal("100m", resources.Requests["cpu"].ToString());
-        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
+        Assert.Equal("1Gi", resources.Requests["memory"].ToString());
         Assert.Null(resources.Limits);
         Assert.Contains("/wrap", EnvOf(pod, "PATH"));
     }

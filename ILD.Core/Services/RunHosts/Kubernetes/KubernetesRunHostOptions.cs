@@ -22,6 +22,8 @@ public sealed record KubernetesRunHostOptions
     public const string KubeconfigSetting = "ILD_K8S_KUBECONFIG";
     public const string ToolsClaimSetting = "ILD_K8S_TOOLS_CLAIM";
     public const string IldNamespaceSetting = "ILD_K8S_ILD_NAMESPACE";
+    public const string RunNodeSelectorSetting = "ILD_K8S_RUN_NODE_SELECTOR";
+    public const string RunTolerationSecondsSetting = "ILD_K8S_RUN_TOLERATION_SECONDS";
 
     private static readonly string[] GitIdentitySettings = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
 
@@ -38,11 +40,17 @@ public sealed record KubernetesRunHostOptions
 
     public string StorageSize { get; init; } = "10Gi";
     public string CpuRequest { get; init; } = "100m";
-    public string MemoryRequest { get; init; } = "256Mi";
+    public string MemoryRequest { get; init; } = "1Gi";
 
     /// <summary>The CPU and memory limits of a run's pod; null is no limit, which is what a setting of <c>0</c> means.</summary>
     public string? CpuLimit { get; init; } = "4";
     public string? MemoryLimit { get; init; } = "8Gi";
+
+    /// <summary>Node labels a run's pod must be scheduled on (<c>nodeSelector</c>), so runs stay off nodes that also hold the database; empty places them anywhere.</summary>
+    public IReadOnlyDictionary<string, string> RunNodeSelector { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>How long a run's pod stays on a node that is NotReady or unreachable before the cluster deletes it; null leaves the cluster's default (300 s).</summary>
+    public int? RunTolerationSeconds { get; init; }
 
     /// <summary>The labels of ILD's own pods, which the run's network policy lets the run reach and be reached by.</summary>
     public IReadOnlyDictionary<string, string> IldPodSelector { get; init; }
@@ -112,6 +120,8 @@ public sealed record KubernetesRunHostOptions
             CpuLimit = Limit(Value(RunHostOptions.CpuLimitSetting) ?? Value(CpuLimitSetting) ?? defaults.CpuLimit),
             MemoryLimit = Limit(Value(RunHostOptions.MemoryLimitSetting) ?? Value(MemoryLimitSetting) ?? defaults.MemoryLimit),
             IldPodSelector = Value(IldPodSelectorSetting) is { } selector ? ParseSelector(selector) : defaults.IldPodSelector,
+            RunNodeSelector = Value(RunNodeSelectorSetting) is { } nodes ? ParseSelector(nodes, RunNodeSelectorSetting) : defaults.RunNodeSelector,
+            RunTolerationSeconds = PositiveInt(Value(RunTolerationSecondsSetting), RunTolerationSecondsSetting),
             IldPort = uri.Port,
             EgressProxyPort = int.TryParse(Value(EgressProxyPortSetting), out var proxyPort) ? proxyPort : 0,
             GatewayTlsPort = ILD.Core.Services.Implementations.ModelGateway.GatewayTlsEndpoint.PortFrom(Value(GatewayTlsPortSetting)) ?? 0,
@@ -149,9 +159,9 @@ public sealed record KubernetesRunHostOptions
     }
 
     // An empty selector selects every pod, so nothing that parses to one gets through, and every key and value must be label syntax.
-    private static IReadOnlyDictionary<string, string> ParseSelector(string selector)
+    private static IReadOnlyDictionary<string, string> ParseSelector(string selector, string setting = IldPodSelectorSetting)
     {
-        var malformed = new InvalidOperationException($"{IldPodSelectorSetting} is '{selector}'; it must be a comma-separated list of key=value labels, with at least one.");
+        var malformed = new InvalidOperationException($"{setting} is '{selector}'; it must be a comma-separated list of key=value labels, with at least one.");
         var labels = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var pair in selector.Split(',', StringSplitOptions.TrimEntries))
         {
