@@ -1189,7 +1189,6 @@ export const SchedulerSettingKeys = {
   /** Minutes between those automatic retries, and how many a run may spend. */
   ThrottleRetryDelayMinutes: "throttle.retryDelayMinutes",
   ThrottleMaxRetries: "throttle.maxRetries",
-  /** Minutes ILD waits for processes an agent left running, and how many such waits in a row a node may take. */
 } as const;
 
 /** Smart chat session titles, and the provider tag they run on (resolved like an AI node's). */

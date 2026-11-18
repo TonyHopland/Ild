@@ -78,6 +78,9 @@ interface VersionOutputs {
   fixed: FixedOutputs;
 }
 
+// One shared empty list, so clearing an already empty list is not a state change.
+const NO_BACKGROUND_TASKS: RunBackgroundTask[] = [];
+
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
  * loop templates, preview and live run state a work item's detail view needs, and
@@ -85,9 +88,6 @@ interface VersionOutputs {
  * (the creation form), where it loads only the repositories and templates the form
  * offers and leaves the item-specific state empty.
  */
-// One shared empty list, so clearing an already empty list is not a state change.
-const NO_BACKGROUND_TASKS: RunBackgroundTask[] = [];
-
 export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkItem) => void) {
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [currentRun, setCurrentRun] = useState<LoopRun | null>(null);

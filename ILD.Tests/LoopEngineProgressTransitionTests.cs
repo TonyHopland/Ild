@@ -152,6 +152,7 @@ internal sealed class RecordingRunNotifier : IRunNotifier
         return Task.CompletedTask;
     }
 
+    public Task BackgroundTasksChangedAsync(Guid runId, Guid nodeId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks) => Task.CompletedTask;
     public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
     public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
 }

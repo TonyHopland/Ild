@@ -386,11 +386,19 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             if (!TryGetString(root, "type", out var eventType))
                 continue;
 
-            if (string.Equals(eventType, "system", StringComparison.OrdinalIgnoreCase)
-                && TryGetString(root, "subtype", out var initSubtype) && initSubtype == "init")
+            if (string.Equals(eventType, "system", StringComparison.OrdinalIgnoreCase))
             {
-                if (sawInit) turnEnded = true;
-                sawInit = true;
+                TryGetString(root, "subtype", out var systemSubtype);
+                if (systemSubtype == "init")
+                {
+                    if (sawInit) turnEnded = true;
+                    sawInit = true;
+                }
+                else if (systemSubtype == "background_tasks_changed" && onBackgroundTasks is not null
+                    && root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
+                {
+                    await onBackgroundTasks(ReadBackgroundTasks(tasks)).ConfigureAwait(false);
+                }
             }
             else if (string.Equals(eventType, "assistant", StringComparison.OrdinalIgnoreCase)
                 && root.TryGetProperty("message", out var message)
@@ -430,26 +438,24 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                     && subtype is "error_max_turns" or "error_during_execution")
                     errorMessage = subtype;
             }
-            else if (onBackgroundTasks is not null
-                && string.Equals(eventType, "system", StringComparison.OrdinalIgnoreCase)
-                && TryGetString(root, "subtype", out var systemSubtype) && systemSubtype == "background_tasks_changed"
-                && root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
-            {
-                // The CLI sends the whole live set every time it changes, so this replaces what was shown.
-                var live = new List<RunBackgroundTask>();
-                foreach (var task in tasks.EnumerateArray())
-                {
-                    if (task.ValueKind != JsonValueKind.Object) continue;
-                    TryGetString(task, "task_type", out var kind);
-                    TryGetString(task, "description", out var description);
-                    TryGetString(task, "subagent_type", out var subagentType);
-                    live.Add(new RunBackgroundTask(kind ?? "task", description ?? string.Empty, string.IsNullOrEmpty(subagentType) ? null : subagentType));
-                }
-                await onBackgroundTasks(live).ConfigureAwait(false);
-            }
         }
 
         return new StreamResult(content.ToString(), sessionId, errorMessage, sawJsonEvents, raw.ToString());
+    }
+
+    /// <summary>The live set of a <c>background_tasks_changed</c> event, which always carries all of it.</summary>
+    private static List<RunBackgroundTask> ReadBackgroundTasks(JsonElement tasks)
+    {
+        var live = new List<RunBackgroundTask>();
+        foreach (var task in tasks.EnumerateArray())
+        {
+            if (task.ValueKind != JsonValueKind.Object) continue;
+            TryGetString(task, "task_type", out var kind);
+            TryGetString(task, "description", out var description);
+            TryGetString(task, "subagent_type", out var subagentType);
+            live.Add(new RunBackgroundTask(kind ?? "task", description ?? string.Empty, string.IsNullOrEmpty(subagentType) ? null : subagentType));
+        }
+        return live;
     }
 
     private static string? ExtractAssistantText(JsonElement message)

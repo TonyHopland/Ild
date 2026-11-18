@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -22,7 +23,7 @@ public sealed class RunProgressBuffer : IRunProgressBuffer
         public readonly object Gate = new();
         public readonly StringBuilder Text = new();
         public long Seq;
-        public IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> Tasks = [];
+        public IReadOnlyList<RunBackgroundTask> Tasks = [];
     }
 
     private readonly ConcurrentDictionary<Guid, Entry> _entries = new();
@@ -40,7 +41,7 @@ public sealed class RunProgressBuffer : IRunProgressBuffer
         }
     }
 
-    public void SetBackgroundTasks(Guid runId, IReadOnlyList<ILD.Data.DTOs.RunBackgroundTask> tasks)
+    public void SetBackgroundTasks(Guid runId, IReadOnlyList<RunBackgroundTask> tasks)
     {
         if (tasks.Count == 0 && !_entries.ContainsKey(runId)) return;
         var entry = _entries.GetOrAdd(runId, _ => new Entry());
