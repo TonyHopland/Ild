@@ -34,6 +34,7 @@ public sealed class RunTerminationTests
     [InlineData(RunTerminationKind.Evicted, "evicted")]
     [InlineData(RunTerminationKind.NodeLost, "lost with its node")]
     [InlineData(RunTerminationKind.Deleted, "was deleted")]
+    [InlineData(RunTerminationKind.PodLost, "no longer exists")]
     public void Other_ways_a_container_ended_are_named(RunTerminationKind kind, string words)
         => Assert.Contains(words, new RunTermination(kind).Describe());
 
@@ -118,7 +119,7 @@ public sealed class RunTerminationTests
     }
 
     [Fact]
-    public async Task A_live_ending_is_read_and_a_run_that_is_gone_is_reported_deleted()
+    public async Task A_live_ending_is_read_and_a_run_that_is_gone_is_reported_lost()
     {
         var host = new InMemoryRunHost();
         var run = Guid.NewGuid();
@@ -127,7 +128,7 @@ public sealed class RunTerminationTests
 
         host.RunEndedBy = null;
         host.RunPresent = false;
-        Assert.Equal(RunTerminationKind.Deleted, (await host.GetTerminationAsync(Guid.NewGuid(), ct: Ct))!.Kind);
+        Assert.Equal(RunTerminationKind.PodLost, (await host.GetTerminationAsync(Guid.NewGuid(), ct: Ct))!.Kind);
     }
 
     [Fact]

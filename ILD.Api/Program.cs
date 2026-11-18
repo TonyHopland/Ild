@@ -355,6 +355,7 @@ try
     app.UseSecurityHeaders();
     app.UseCors("AllowFrontend");
     app.UseMiddleware<MaintenanceMiddleware>();
+    app.UseMiddleware<RunPodLostMiddleware>();
 
     var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
     // Vite names every file under assets/ by its content hash, so a new build

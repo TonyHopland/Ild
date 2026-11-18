@@ -38,11 +38,29 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
 
-    public V1ConfigMap Owner(Guid ownerId) => new()
+    public V1ConfigMap Owner(Guid ownerId, RunEnvironmentRequest? request = null) => new()
     {
         Metadata = Meta(ownerId),
-        Data = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") },
+        Data = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") }
+            .Concat(request is null ? [] : RequestData(request)).ToDictionary(p => p.Key, p => p.Value),
     };
+
+    /// <summary>The merge patch that gives an owner made before the request was kept the request.</summary>
+    public static V1Patch RequestPatch(RunEnvironmentRequest request)
+        => new(new { data = RequestData(request).ToDictionary(p => p.Key, p => p.Value) }, V1Patch.PatchType.MergePatch);
+
+    private static IEnumerable<KeyValuePair<string, string>> RequestData(RunEnvironmentRequest request) =>
+    [
+        new("basePath", request.BasePath), new("branch", request.BranchName), new("repository", request.RepositoryId.ToString("D")),
+        new("dns", request.Dns ? "true" : "false"), new("keepPreviewData", request.KeepPreviewData ? "true" : "false"),
+    ];
+
+    /// <summary>The request a run's owner ConfigMap was made with; null for one made without (an older run).</summary>
+    public static RunEnvironmentRequest? RequestOf(Guid ownerId, V1ConfigMap owner)
+        => owner.Data is { } d && d.TryGetValue("basePath", out var basePath) && d.TryGetValue("branch", out var branch)
+            && d.TryGetValue("repository", out var repository) && Guid.TryParse(repository, out var repositoryId)
+            ? new RunEnvironmentRequest(ownerId, basePath, branch, repositoryId, d.TryGetValue("dns", out var dns) && dns == "true", d.TryGetValue("keepPreviewData", out var keep) && keep == "true")
+            : null;
 
     public static V1OwnerReference OwnerReference(V1ConfigMap owner) => new()
     {
@@ -227,7 +245,15 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
     }
 
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false, string? nameServer = null)
-        => BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
+    {
+        var pod = BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
+        pod.Spec.Containers[0].Resources.Requests["memory"] = new(options.RunMemoryRequest);
+        if (options.RunNodeSelector.Count > 0) pod.Spec.NodeSelector = options.RunNodeSelector.ToDictionary(p => p.Key, p => p.Value);
+        if (options.RunTolerationSeconds is { } seconds)
+            pod.Spec.Tolerations = new[] { "node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable" }
+                .Select(key => new V1Toleration { Key = key, OperatorProperty = "Exists", Effect = "NoExecute", TolerationSeconds = seconds }).ToList();
+        return pod;
+    }
 
     // The zones every chat mounts: the agents' and the shared toolchains, never a repository's own tools.
     private static readonly RunToolMount[] ChatToolZones = [new(RunToolZone.Agents), new(RunToolZone.Toolchains)];

@@ -10,6 +10,8 @@ public enum RunTerminationKind
     Evicted,
     NodeLost,
     Deleted,
+    /// <summary>The pod or container is gone, and nothing says how: what it held that was not kept is lost with it.</summary>
+    PodLost,
     Other,
 }
 
@@ -32,8 +34,13 @@ public sealed record RunTermination(
         RunTerminationKind.Evicted => With("The run's container was evicted by its node", Detail),
         RunTerminationKind.NodeLost => With("The run's container was lost with its node", Detail),
         RunTerminationKind.Deleted => With("The run's container was deleted while a command was running in it", Detail),
+        RunTerminationKind.PodLost => "The run's container no longer exists.",
         _ => With("The run's container ended", Detail),
     };
+
+    /// <summary>What a command in a run whose <paramref name="noun"/> (pod or container) is gone is told, with the way on.</summary>
+    public static string LostText(string noun)
+        => $"The run {noun} no longer exists. Retry the node: ILD makes the {noun} again with the work it kept. If the retry fails the same way, what the run had not pushed is lost and the work item has to be started again.";
 
     /// <summary>The reason a node that failed this way is parked with: its own for an out-of-memory kill, the generic one for the rest.</summary>
     public string HumanFeedbackReason => Kind == RunTerminationKind.OutOfMemory ? HumanFeedbackReasons.OutOfMemory : HumanFeedbackReasons.NodeFailed;
@@ -53,5 +60,20 @@ public sealed record RunTermination(
         if (bytes >= Gi) return bytes % Gi == 0 ? $"{bytes / Gi}Gi" : ((double)bytes / Gi).ToString("0.#", CultureInfo.InvariantCulture) + "Gi";
         if (bytes >= Mi) return bytes % Mi == 0 ? $"{bytes / Mi}Mi" : ((double)bytes / Mi).ToString("0.#", CultureInfo.InvariantCulture) + "Mi";
         return bytes.ToString(CultureInfo.InvariantCulture) + "B";
+    }
+}
+
+/// <summary>A command could not start because the run's pod or container no longer exists. The message says so and what to do.</summary>
+public sealed class RunPodLostException(Guid run, string text)
+    : InvalidOperationException(text)
+{
+    public Guid Run { get; } = run;
+
+    /// <summary>The lost pod behind <paramref name="failure"/>, however deep it was wrapped; null when that is not what failed.</summary>
+    public static RunPodLostException? In(Exception failure)
+    {
+        for (var e = failure; e is not null; e = e.InnerException)
+            if (e is RunPodLostException lost) return lost;
+        return null;
     }
 }

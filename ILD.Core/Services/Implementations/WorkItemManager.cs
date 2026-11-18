@@ -1342,13 +1342,13 @@ public class WorkItemManager : IWorkItemManager
         // the link must open the branch the Overview names.
         var branch = workItem.BranchName;
         var worktreePath = workItem.WorktreePath;
-        if (string.IsNullOrWhiteSpace(branch)
-            || string.IsNullOrWhiteSpace(worktreePath) || !await _runHost.DirectoryExistsAsync(worktreePath)
-            || workItem.RunRepositoryId is not { } repositoryId)
+        if (string.IsNullOrWhiteSpace(branch) || string.IsNullOrWhiteSpace(worktreePath) || workItem.RunRepositoryId is not { } repositoryId)
             return null;
 
         try
         {
+            if (!await _runHost.DirectoryExistsAsync(worktreePath))
+                return null;
             var repo = await _providerStore.GetRepositoryByIdAsync(repositoryId);
             if (repo is null)
                 return null;
@@ -1359,6 +1359,11 @@ public class WorkItemManager : IWorkItemManager
                 return null;
 
             return BranchWebUrl.For(remoteProvider.Type, repo.CloneUrl, branch);
+        }
+        catch (Exception ex) when (RunPodLostException.In(ex) is { } lost)
+        {
+            workItem.WorktreeProblem = lost.Message;
+            return null;
         }
         catch (Exception ex)
         {

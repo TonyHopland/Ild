@@ -43,6 +43,12 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
     /// <summary>Every delete a client asked for, as <c>kind/name</c>, in order; the garbage collection that follows is not in it.</summary>
     public List<string> Deleted { get; } = [];
 
+    /// <summary>Every patch a client made, as <c>kind/name</c>.</summary>
+    public List<string> Patched { get; } = [];
+
+    /// <summary>The pod's volume is gone: its next start finds no checkout and clones again.</summary>
+    public void ForgetCheckout(string pod) { lock (_gate) _checkedOut.Remove(pod); }
+
     private readonly List<FakeExec> _execs = [];
 
     /// <summary>The commands started so far; a copy, since a command may start while a test reads them.</summary>
@@ -206,6 +212,21 @@ internal sealed class FakeKubernetesApi : IAsyncDisposable
             app.MapGet(root + "/{name}", (string ns, string name) => Read(ns, kind, name));
             app.MapDelete(root + "/{name}", async (HttpContext http, string ns, string name) => await Delete(http, ns, kind, name));
         }
+        app.MapMethods("/api/v1/namespaces/{ns}/configmaps/{name}", ["PATCH"], async (HttpContext http, string ns, string name) =>
+        {
+            using var reader = new StreamReader(http.Request.Body);
+            var patch = JsonDocument.Parse(await reader.ReadToEndAsync());
+            lock (_gate)
+            {
+                if (!_objects.TryGetValue((ns, "configmaps", name), out var found)) return Failure(404, "NotFound", $"configmaps \"{name}\" not found");
+                var map = (V1ConfigMap)found;
+                map.Data ??= new Dictionary<string, string>();
+                if (patch.RootElement.TryGetProperty("data", out var data))
+                    foreach (var p in data.EnumerateObject()) map.Data[p.Name] = p.Value.GetString()!;
+                Patched.Add($"configmaps/{name}");
+                return Json(map);
+            }
+        });
         app.MapGet("/apis/storage.k8s.io/v1/storageclasses", () => Json(new V1StorageClassList { Items = StorageClasses }));
         app.MapGet("/api/v1/namespaces/{ns}/pods/{name}/exec", async (HttpContext http, string ns, string name) => await Exec(http, ns, name));
     }
@@ -405,6 +426,8 @@ internal sealed class FakeExec(string pod, IReadOnlyList<string> command, bool w
     public string StdinSoFar() => Encoding.UTF8.GetString(_stdin.ToArray());
 
     public Task WriteStdoutAsync(string text) => SendAsync(1, Encoding.UTF8.GetBytes(text));
+
+    public Task WriteStdoutBytesAsync(byte[] data) => SendAsync(1, data);
 
     public Task WriteStderrAsync(string text) => SendAsync(2, Encoding.UTF8.GetBytes(text));
 

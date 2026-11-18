@@ -723,6 +723,18 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("button", { name: "Pull branch" })).toBeTruthy();
   });
 
+  test("overview says why the worktree cannot be read when the run's pod is gone", async () => {
+    mockServices();
+    const lost = "The run pod no longer exists. Retry the node.";
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      branchItem({ branchUrl: null, worktreeProblem: lost }),
+    );
+    await renderDialog(branchItem());
+
+    expect((await screen.findByRole("alert")).textContent).toBe(lost);
+    expectPlainBranch(LINKED_BRANCH);
+  });
+
   const UNLINKED_BRANCH_CASES: { name: string; read: () => Promise<WorkItem> }[] = [
     {
       name: "the branch is not pushed",

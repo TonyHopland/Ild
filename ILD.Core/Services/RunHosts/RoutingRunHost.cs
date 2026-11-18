@@ -69,6 +69,10 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
     public Task DeleteAsync(RunEnvironment environment, CancellationToken ct = default)
         => For(environment.WorkingDirectory).DeleteAsync(environment, ct);
 
+    public Task<bool?> CheckpointAsync(Guid runId, CancellationToken ct = default) => isolated.CheckpointAsync(runId, ct);
+
+    public Task<string?> RecoverAsync(Guid runId, CancellationToken ct = default) => isolated.RecoverAsync(runId, ct);
+
     public Task<bool> IsRunningAsync(RunEnvironment environment, CancellationToken ct = default)
         => For(environment.WorkingDirectory).IsRunningAsync(environment, ct);
 
