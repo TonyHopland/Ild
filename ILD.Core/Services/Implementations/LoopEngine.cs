@@ -1124,6 +1124,15 @@ public sealed partial class LoopEngine : ILoopEngine
                 await _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
             });
 
+        async Task EndNodeAsync(LoopRunNodeStatus status, string? output, string? error, ILD.Data.DTOs.TokenUsage? usage = null)
+        {
+            await CompleteRunNodeAsync(loopRunStore, runNodeId, status, output, error, usage);
+            await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+        }
+
+        if (entryStatus == LoopRunStatus.Running)
+            await LostRunEnvironment.RestoreAsync(sp.GetService<IRunLifecycle>(), eventLog, _logger, run, node.Id, ct);
+
         IAsyncEnumerator<NodeOutcome>? enumerator = null;
         try
         {
@@ -1144,8 +1153,7 @@ public sealed partial class LoopEngine : ILoopEngine
                     // LaunchAsync, which swallows it cleanly.
                     if (runNodeId is not null)
                     {
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, null, "Run cancelled");
-                        await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                        await EndNodeAsync(LoopRunNodeStatus.Interrupted, null, "Run cancelled");
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                     }
                     throw;
@@ -1211,8 +1219,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         // either way (the work happened), but stop without
                         // routing when the run state changed underneath us.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null, ok.Usage);
-                        await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                        await EndNodeAsync(LoopRunNodeStatus.Succeeded, ok.Output, null, ok.Usage);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeCompleted, ok.Output ?? string.Empty, node.Id, runNodeId: id));
@@ -1261,16 +1268,14 @@ public sealed partial class LoopEngine : ILoopEngine
                             // (e.g. "claude-code timed out"). Record an interruption
                             // rather than a failure, and stop without traversing the
                             // OnFailure edge into another node.
-                            await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, f.Output, "Run cancelled");
-                            await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                            await EndNodeAsync(LoopRunNodeStatus.Interrupted, f.Output, "Run cancelled");
                             if (runNodeId is not null)
                                 await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                             return ParkResult.Stop;
                         }
                         // Same stale-write guard as the Success branch.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
-                        await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                        await EndNodeAsync(LoopRunNodeStatus.Failed, f.Output, f.Reason);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
                         if (eventLog is not null && runNodeId is Guid endedId && f.Termination is { } ended)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunContainerEnded, ended.Describe(), node.Id, runNodeId: endedId));
@@ -1308,8 +1313,7 @@ public sealed partial class LoopEngine : ILoopEngine
                         // alone. Deliberately NOT HaltRunAsync: that cancels the
                         // run's CTS to kill a live agent, and there is none here.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, intr.Output, intr.Reason);
-                        await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                        await EndNodeAsync(LoopRunNodeStatus.Interrupted, intr.Output, intr.Reason);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                         if (eventLog is not null && runNodeId is Guid interruptedId)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeInterrupted, intr.Reason, node.Id, runNodeId: interruptedId));
@@ -1346,8 +1350,7 @@ public sealed partial class LoopEngine : ILoopEngine
                     case NodeOutcome.WaitingAction wa:
                     {
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.WaitingHuman, wa.Output, null);
-                        await CheckpointRunAsync(sp, run.Id, node.Id, runNodeId);
+                        await EndNodeAsync(LoopRunNodeStatus.WaitingHuman, wa.Output, null);
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
@@ -1775,25 +1778,25 @@ public sealed partial class LoopEngine : ILoopEngine
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 
-    // How long a checkpoint of a run's worktree may take before the run goes on without it.
     private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Keeps the run's worktree outside its pod (ADR-0040) after a node ends and before the run waits for a person, so a pod that is lost while
-    /// the run is parked does not take the only copy of the work. Best effort: a run never stops for it.
+    /// the run is parked does not take the only copy of the work. Best effort: a run never stops for it. A run that has ended is not
+    /// checkpointed: its environment is being removed, and its checkpoint with it.
     /// </summary>
-    private async Task CheckpointRunAsync(IServiceProvider sp, Guid runId, Guid? nodeId = null, Guid? runNodeId = null)
+    private async Task CheckpointRunAsync(IServiceProvider sp, Guid runId, Guid? nodeId, Guid? runNodeId)
     {
-        if (_podLost.ContainsKey(runId)) return;
         if (sp.GetService<IRunLifecycle>() is not { } host) return;
+        using (var scope = _sp.CreateScope())
+        {
+            var status = (await scope.ServiceProvider.GetRequiredService<ILoopRunStore>().GetByIdAsync(runId))?.Status;
+            if (status is not { } current || !IsAlive(current)) return;
+        }
         using var limit = new CancellationTokenSource(CheckpointTimeout);
         bool? kept = null;
         await TrySafe(runId, async () => kept = await host.CheckpointAsync(runId, limit.Token));
-        if (sp.GetService<IEventLogService>() is not { } eventLog) return;
-        // What the host did to bring a lost pod back, and a checkpoint it could not keep, are told on the run, not only in a log.
-        if (host.TakeRecoveryNote(runId) is { } note)
-            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.RunRecovered, note, nodeId, runNodeId));
-        if (kept == false)
+        if (kept == false && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.CheckpointFailed,
                 "The run's worktree could not be checkpointed outside its pod; until the next checkpoint a lost pod takes what the run did since the last one.", nodeId, runNodeId));
     }
@@ -1801,23 +1804,7 @@ public sealed partial class LoopEngine : ILoopEngine
     private static bool IsAlive(LoopRunStatus status)
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 
-    // Runs being parked because their pod is gone: the loop they unwind through must not exec into that pod (a checkpoint would make it again).
-    private readonly ConcurrentDictionary<Guid, byte> _podLost = new();
-
     public async Task ParkRunOnLostPodAsync(Guid runId, RunTermination ended)
-    {
-        _podLost[runId] = 0;
-        try
-        {
-            await ParkLostPodCoreAsync(runId, ended);
-        }
-        finally
-        {
-            _podLost.TryRemove(runId, out _);
-        }
-    }
-
-    private async Task ParkLostPodCoreAsync(Guid runId, RunTermination ended)
     {
         var reason = ended.Describe() + " " + RunTermination.LostText("pod");
         Guid? nodeId;

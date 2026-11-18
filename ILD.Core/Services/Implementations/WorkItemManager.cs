@@ -1336,13 +1336,6 @@ public class WorkItemManager : IWorkItemManager
         return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
     }
 
-    private static RunPodLostException? FindPodLost(Exception ex)
-    {
-        for (var e = ex; e is not null; e = e.InnerException)
-            if (e is RunPodLostException lost) return lost;
-        return null;
-    }
-
     public async Task<string?> GetBranchUrlAsync(WorkItemView workItem)
     {
         // No run-id fallback for the branch, unlike ResolveBranchContextAsync:
@@ -1367,9 +1360,8 @@ public class WorkItemManager : IWorkItemManager
 
             return BranchWebUrl.For(remoteProvider.Type, repo.CloneUrl, branch);
         }
-        catch (Exception ex) when (FindPodLost(ex) is { } lost)
+        catch (Exception ex) when (RunPodLostException.In(ex) is { } lost)
         {
-            // The item still opens: the run's node can be retried, which makes the pod again.
             workItem.WorktreeProblem = lost.Message;
             return null;
         }

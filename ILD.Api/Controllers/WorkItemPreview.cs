@@ -1,6 +1,6 @@
-using ILD.Api.Middleware;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.RunHosts;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -187,7 +187,7 @@ public sealed class WorkItemPreview(
         {
             return await call(item);
         }
-        catch (Exception ex) when (RunPodLostMiddleware.PodLostIn(ex) is { } lost)
+        catch (Exception ex) when (RunPodLostException.In(ex) is { } lost)
         {
             return PreviewResult<T>.Failed(PreviewRefusal.PodLost, lost.Message);
         }

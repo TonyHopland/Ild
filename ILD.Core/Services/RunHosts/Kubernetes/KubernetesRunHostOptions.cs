@@ -40,7 +40,10 @@ public sealed record KubernetesRunHostOptions
 
     public string StorageSize { get; init; } = "10Gi";
     public string CpuRequest { get; init; } = "100m";
-    public string MemoryRequest { get; init; } = "1Gi";
+    public string MemoryRequest { get; init; } = "256Mi";
+
+    /// <summary>The memory a run's pod asks the scheduler for. A run grows to gigabytes, so it asks for more than the chat, installer and sign-in pods do.</summary>
+    public string RunMemoryRequest { get; init; } = "1Gi";
 
     /// <summary>The CPU and memory limits of a run's pod; null is no limit, which is what a setting of <c>0</c> means.</summary>
     public string? CpuLimit { get; init; } = "4";
@@ -117,6 +120,7 @@ public sealed record KubernetesRunHostOptions
             StorageSize = Value(StorageSizeSetting) ?? defaults.StorageSize,
             CpuRequest = Value(CpuRequestSetting) ?? defaults.CpuRequest,
             MemoryRequest = Value(MemoryRequestSetting) ?? defaults.MemoryRequest,
+            RunMemoryRequest = Value(MemoryRequestSetting) ?? defaults.RunMemoryRequest,
             CpuLimit = Limit(Value(RunHostOptions.CpuLimitSetting) ?? Value(CpuLimitSetting) ?? defaults.CpuLimit),
             MemoryLimit = Limit(Value(RunHostOptions.MemoryLimitSetting) ?? Value(MemoryLimitSetting) ?? defaults.MemoryLimit),
             IldPodSelector = Value(IldPodSelectorSetting) is { } selector ? ParseSelector(selector) : defaults.IldPodSelector,

@@ -1371,6 +1371,11 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           ) : (
             <span className="detail-value wiv2-meta-mono">{workItem.branchName}</span>
           )}
+          {detail.worktreeProblem && (
+            <span className="preview-message preview-error" role="alert">
+              {detail.worktreeProblem}
+            </span>
+          )}
           {workItem.worktreePath && (
             <>
               <button

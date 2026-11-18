@@ -183,7 +183,6 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
         {
             var existing = await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(owner), _namespace, cancellationToken: ct);
-            // A run made before the request was kept has none: it is given the one the engine has just passed, so its pod can be made again.
             if (KubernetesManifests.RequestOf(owner, existing) is null)
             {
                 try
@@ -436,12 +435,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
 
     // A pod nothing restarts (RestartPolicy Never) that was evicted or lost its node: made again once, then the command retried.
     protected override async Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct)
-    {
-        if (ct.IsCancellationRequested) return false;
-        if (await ReplaceEndedRunPodAsync(run, ct)) return true;
-        // A pod that is not there at all: made again from the request kept in the run's ConfigMap, on the volume if it survived.
-        return await ReadPodOrNullAsync(RunNames.Run(run), ct) is null && await RecreateRunAsync(run, ct);
-    }
+        => !ct.IsCancellationRequested && await ReplaceEndedRunPodAsync(run, ct);
 
     protected override async Task<RunEnvironmentRequest?> ReadRunRequestAsync(Guid run, CancellationToken ct)
     {

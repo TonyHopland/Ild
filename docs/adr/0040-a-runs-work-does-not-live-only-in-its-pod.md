@@ -1,43 +1,25 @@
 # ADR-0040: A run's work does not live only in its pod
 
-Work item 696 lost every unpushed change when its run pod disappeared; a retry then failed on the exec websocket with a raw 404, because the Kubernetes host revived only a pod that still existed in phase Failed or Succeeded.
+A run's pod is a bare pod: when its node goes NotReady the cluster deletes it after the toleration period, and nothing makes it again. Work item 696 lost its pod that way (the node ran out of memory under a run whose memory request was far below what it used), every later command failed on a raw 404 from the exec API, and the run stayed `Running` with nothing driving it. The run's volume had survived, but nothing used it.
 
 ## Decision
 
-- **Make a missing pod again.** The run's owner ConfigMap now records what the run was made from (base path, branch, repository, DNS and preview-data flags). When a command meets a pod that is not there, the Kubernetes host builds the pod again from that record, on the run's claim if it survived, and logs what came back. A run made before this has no record and is reported as lost.
-- **Say so when it cannot.** A command in a run whose pod is gone and cannot be made again fails with `RunPodLostException`: "The run pod no longer exists" with the way on. `RunTerminationKind.PodLost` is what a node failed by a vanished pod reports. The API answers 409 with the same text for any request (preview, the worktree tools, the chat's reads) that reached a lost pod, instead of a 500 or a raw status.
-- **Keep the work outside the pod: a checkpoint, not a branch.** After every node and before the run waits for a person, the host commits everything git does not ignore (tracked, changed and untracked) on a temporary index, and bundles it into ILD's base repository as the hidden ref `refs/ild/runs/<run>`. Nothing is pushed to the remote, so no CI runs, no half-done branch appears for review, and nothing `.gitignore` keeps out (secrets such as `.env`) leaves the pod. The ref is removed when the run's environment is deleted. A pod made again after its volume was lost checks the branch out and puts the checkpoint back: its commits, and its uncommitted and untracked files as uncommitted edits.
-- **Why not only a push, why not only a volume.** A push of the run's branch would publish half-done work and trip CI and review, and still leave uncommitted files in the pod. The per-run volume the Kubernetes host already has keeps uncommitted edits but is deleted with the run's ConfigMap or lost with its node's storage. The volume stays the first source; the checkpoint covers its loss.
-- **What a checkpoint leaves unprotected.** What the run did after the last checkpoint (a node in progress), and files git ignores. A checkpoint is best effort: it is bounded in time and never stops a run.
-- **Prevention.** A sweep keeps the objects of every run that is not Completed or Cancelled (Running, waiting, halted, failed), and the idle reaper touches only the chat pod; each has a test. Run pods carry `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so a node scale-down does not drain them.
-- **A lost pod is noticed, not only met.** A watchdog checks every minute that a `Running` run still has its pod or container; two checks in a row that find it missing park the run as Node Failed with the pod-lost reason (the same park a crash makes, so Retry works), and cut off whatever the loop was waiting on.
-- **What is told on the run.** What a recreated pod got back, and what it did not, is an event on the run (`RunRecovered`); a checkpoint that could not be kept is one too (`CheckpointFailed`).
-- **When a checkpoint is made.** After every node (succeeded, failed, interrupted), when a node waits for an answer, and when a halt cuts a node off. A run parked for a long time relies on the checkpoint taken as it parked: nothing changes in a parked pod, but if its volume and pod are lost after that, the checkpoint is what comes back, and an agent that was still writing when a halt landed loses what it wrote after the halt's checkpoint.
-- **Verified.** `KubernetesRunHostTests` deletes a run's pod and volume after a checkpoint and starts a command: the pod is made again and the checkout is restored from the checkpoint with the real scripts, with its commit, edit and untracked file back.
-- **Not done: reading the pushed branch.** The worktree tools and preview report a lost pod, but do not yet fall back to reading the run's pushed branch when there is one.
-- **Not done: the Docker host.** It keeps no record of a run's request to make a container from and checkpoints nothing; a missing container is reported as lost, and a stopped one is still started again (as before).
+- **A lost pod is made again before a node runs, and nowhere else.** The run's owner ConfigMap records what the run was made from. Before each node of a `Running` run, and before a recovered run is resumed, ILD asks the host to recover the run: a pod that no longer exists is made again from that record, on the run's volume if it survived, and what came back is an event on the run (`RunRecovered`). A command never makes a pod: recreation holds the repository's lock and can take minutes, which neither a read behind an API request nor a command inside another creation may do.
+- **A command in a lost pod says so.** It fails with `RunPodLostException`, which names the way on (retry the node). The API answers such a request 409 with code `run-pod-lost`; the work item itself still opens and carries the message.
+- **A lost pod is noticed, not only met.** A watchdog checks every minute that a `Running` run still has its pod. Two checks in a row that find it missing park the run as Node Failed, so a retry makes the pod again.
+- **The work is also kept outside the pod, as a checkpoint and not as a branch.** After every node, and when a node parks for a person or is halted, the host commits everything git does not ignore on a temporary index and keeps it in ILD's base repository as the hidden ref `refs/ild/runs/<run>`. A pod made again without its volume gets its commits back, and its uncommitted and untracked files as uncommitted edits. The ref is never given to another run and goes when the run's environment is removed.
+- **Where run pods go is the operator's to say.** `ILD_K8S_RUN_NODE_SELECTOR` keeps runs off chosen nodes, `ILD_K8S_RUN_TOLERATION_SECONDS` lets a pod outlast a node that comes back, and a run pod's default memory request is 1Gi so the scheduler counts it.
 
-## Root cause of work item 696's pod loss
+## Why
 
-From cluster metrics and logs, 17 Nov (UTC). It was not an ILD action.
+- **Not a pushed branch.** It would publish half-done work, trip CI and review, and still leave uncommitted files in the pod.
+- **Not the volume alone.** It keeps everything while it exists, but it goes with the run's ConfigMap or its node's storage. The volume is the first source and the checkpoint covers its loss.
+- **Not recreation from inside a command.** That was tried first. It made any read recreate pods, and it needed the repository's lock from places that already held it.
 
-- The run pod requested 256Mi of memory with a 6Gi limit and was scheduled on the smallest node (8 GiB; the others have 16 GiB), next to the database and other workloads.
-- 18:08-18:38: the run pod grew from 0.14 to 4.0 GiB while the node's available memory fell from 1.8 to 0.5 GiB.
-- 18:39: the node went NotReady and got the unreachable taint. The database on it stalled; that is the "transient failure" that failed the Develop node at 18:41.
-- 18:44: the default 300 s toleration expired and the taint manager deleted every pod on the node. ILD and the database came back through their controllers. The run pod is a bare pod, so nothing made it again.
-- 18:45 on: startup reconciliation and orphan recovery met the exec 404 every minute, which is why the run stayed Running.
-- No node reboot, no OOM kill, and no ILD sweep or idle cleanup was involved. The run's volume claim and ConfigMap survived until the replacement run started and ILD deleted the old run's environment: the work was lost by that cleanup, not with the pod.
+## Limits
 
-### What protects a run pod from a NotReady node, and what does not
-
-- **Does not:** the cluster-autoscaler `safe-to-evict` annotation (it only governs autoscaler drains, not taint-based eviction), and the memory limit (the node failed under the sum of its workloads, not on an OOM kill).
-- **Reduces the odds:** `ILD_K8S_RUN_NODE_SELECTOR` keeps runs off the node that holds the database; the default memory request is now 1Gi, so the scheduler no longer counts a growing run as nearly free; `ILD_K8S_RUN_TOLERATION_SECONDS` lets a pod stay longer on a node that may come back.
-- **What actually saves the work:** nothing stops a node from being lost. The pod is made again on its surviving volume (the claim and its ConfigMap outlive the pod), and the checkpoint covers a lost volume.
-- **Existing runs:** a run made before this version gets its record patched into its ConfigMap when its start meets it; this needs the `patch` verb on `configmaps` in ILD's Role (`docs/kubernetes/role.yaml`). Without it ILD warns and such a run is reported as lost, as before.
-
-### Follow-ups, not in this change
-
-- A plain read (a GET) can make a pod again, waiting on the repository lock inside the request.
-- A checkpoint on the cancel path can race the removal of the run's environment.
-- Checkpoint refs are removed only when the run's environment is deleted, not on the sweep's teardown; a new run's checkout bundles every ref, including other runs' checkpoints. Exclude `refs/ild/` from that bundle and remove the ref on every teardown.
-- The checkpoint script rebuilds its index from `HEAD`, so `git add -A` rehashes every tracked file; seed it from the run's own index.
+- A checkpoint is best effort and bounded in time. What a run did after its last checkpoint, and files git ignores, are lost with the volume.
+- Nothing stops a node from being lost. The settings above lower the odds; recovery is what saves the work.
+- A run made before this version has no record until its Start node runs again, which needs the `patch` verb on `configmaps`. Until then its lost pod is reported as lost.
+- The Docker host keeps no record and no checkpoint: a missing container is reported as lost.
+- The worktree tools and the preview report a lost pod; they do not fall back to the pushed branch.

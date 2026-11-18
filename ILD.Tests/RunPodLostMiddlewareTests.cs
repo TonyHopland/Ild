@@ -22,7 +22,7 @@ public sealed class RunPodLostMiddlewareTests
         Assert.Equal(StatusCodes.Status409Conflict, context.Response.StatusCode);
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("The run pod no longer exists and could not be made again", body);
+        Assert.Contains("The run pod no longer exists", body);
         Assert.Contains("run-pod-lost", body);
     }
 

@@ -516,7 +516,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested) await RememberEndingAsync(owner.Id, ct);
-            if (Making.Value || !await ReviveRunAsync(owner.Id, ex, ct))
+            if (!await ReviveRunAsync(owner.Id, ex, ct))
             {
                 if (!ct.IsCancellationRequested && !(await ReadRunStateAsync(owner.Id, ct)).Found)
                     throw new RunPodLostException(owner.Id, RunTermination.LostText(Noun));
@@ -546,29 +546,11 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<RunEnvironment> CreateAsync(RunEnvironmentRequest request, CancellationToken ct = default)
         => (await CreateCoreAsync(request, ct)).Environment;
 
-    // Set while a pod or container is being made: a command inside that meets it missing again fails, and does not revive. A revive makes the
-    // environment again under the repository's lock, which the start of a run (or the recreation itself) already holds, and the lock is not reentrant.
-    private static readonly AsyncLocal<bool> Making = new();
-
     private async Task<(RunEnvironment Environment, RunCheckout Checkout)> CreateCoreAsync(RunEnvironmentRequest request, CancellationToken ct)
-    {
-        var was = Making.Value;
-        Making.Value = true;
-        try
-        {
-            return await MakeCoreAsync(request, ct);
-        }
-        finally
-        {
-            Making.Value = was;
-        }
-    }
-
-    private async Task<(RunEnvironment Environment, RunCheckout Checkout)> MakeCoreAsync(RunEnvironmentRequest request, CancellationToken ct)
     {
         var owner = request.OwnerId;
         var environment = new RunEnvironment(owner, RunPaths.WorkingDirectory(owner));
-        if (await IsRunReadyAsync(owner, ct)) return (environment, RunCheckout.AlreadyThere);
+        if (await IsRunReadyAsync(owner, ct)) return (environment, RunCheckout.Kept);
 
         var tools = await ToolsForAsync($"Run {owner}", RunToolDetector.Resolve(request.BasePath), request.RepositoryId, ct);
         await RememberEndingAsync(owner, ct);
@@ -589,9 +571,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         await SyncPreviewDataBackAsync(environment, ct);
         var request = await ReadRunRequestAsync(environment.OwnerId, ct);
         await RemoveRunAsync(environment.OwnerId, ct);
-        // The run is over: its checkpoint goes with it.
-        if (request is not null)
-            await runner.RunAsync("git", ["-C", request.BasePath, "update-ref", "-d", CheckpointRef(environment.OwnerId)], "/", ct);
+        await DropCheckpointAsync(environment.OwnerId, request, ct);
         _terminations.TryRemove(environment.OwnerId, out _);
     }
 
@@ -838,7 +818,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             await using (var sink = bundleFile.OpenWrite())
             {
                 var created = await runner.RunAsync(
-                    "git", ["-C", request.BasePath, "bundle", "create", "--quiet", "-", "--all"], "/", ct, null,
+                    "git", ["-C", request.BasePath, "bundle", "create", "--quiet", "-", $"--exclude={CheckpointRefs}", "--all"], "/", ct, null,
                     new ProcessRunOptions(StandardOutputTo: sink));
                 if (!created.Success)
                     throw new InvalidOperationException($"could not bundle {request.BasePath} for the run's {Noun}: {created.StdErr.Trim()}");
@@ -870,17 +850,24 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     }
 
     // -- Checkpoints -------------------------------------------------------------
-    // The run's worktree also lives in ILD's base repository, as refs/ild/runs/<run>: a commit of everything tracked and untracked that
-    // git does not ignore (so no secret a .gitignore keeps out), made on a temporary index so the run's own index and branch stay as they
-    // are. It is a hidden ref, never a branch: nothing is pushed to the remote, no CI runs on it, and no half-done branch is left there.
+    // A hidden ref in ILD's base repository, never a branch: nothing reaches the remote, and what .gitignore keeps out stays in the pod.
 
     private static string CheckpointRef(Guid run) => $"refs/ild/runs/{run:N}";
+
+    // Left out of what a new run is given: one run's uncommitted work is not another's.
+    private const string CheckpointRefs = "refs/ild/runs/*";
+
+    private async Task DropCheckpointAsync(Guid run, RunEnvironmentRequest? request, CancellationToken ct)
+    {
+        if (request is not null)
+            await runner.RunAsync("git", ["-C", request.BasePath, "update-ref", "-d", CheckpointRef(run)], "/", ct);
+    }
 
     internal const string CheckpointScript = """
         cd -- "$1" || exit 1
         d=$(mktemp -d) || exit 1
         trap 'rm -rf -- "$d"' EXIT
-        GIT_INDEX_FILE="$d/index" git read-tree HEAD || exit 1
+        cp -- "$(git rev-parse --git-path index)" "$d/index" 2>/dev/null || GIT_INDEX_FILE="$d/index" git read-tree HEAD || exit 1
         GIT_INDEX_FILE="$d/index" git add -A || exit 1
         tree=$(GIT_INDEX_FILE="$d/index" git write-tree) || exit 1
         commit=$(git -c user.name=ILD -c user.email=ild@localhost commit-tree "$tree" -p HEAD -m "ILD checkpoint") || exit 1
@@ -902,13 +889,13 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
 
     /// <summary>
     /// What a run's worktree is kept as outside its pod: the checkpoint is read out of the pod and put in ILD's base repository. Best effort and
-    /// never throws: null when the host keeps no record of where the base repository is, false when the pod cannot be reached or git refuses.
+    /// never throws: null when there is no record of the base repository to keep it in or no pod to read it from, false when git refuses.
     /// </summary>
     public async Task<bool?> CheckpointAsync(Guid run, CancellationToken ct = default)
     {
         try
         {
-            if (await ReadRunRequestAsync(run, ct) is not { } request) return null;
+            if (await ReadRunRequestAsync(run, ct) is not { } request || !(await ReadRunStateAsync(run, ct)).Found) return null;
             using var bundleFile = PrivateTempFile.Create("ild-checkpoint-");
             await using (var sink = bundleFile.OpenWrite())
             {
@@ -932,7 +919,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         }
     }
 
-    // Puts the checkpoint back into a checkout made again: its commits, and its uncommitted and untracked files as the edits they were.
     private async Task<bool> RestoreCheckpointAsync(Guid owner, RunEnvironmentRequest request, string workingDirectory, CancellationToken ct)
     {
         var has = await runner.RunAsync("git", ["-C", request.BasePath, "rev-parse", "--verify", "--quiet", CheckpointRef(owner)], "/", ct);
@@ -961,8 +947,6 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     /// <summary>How a run's worktree came to be when its environment was made.</summary>
     protected enum RunCheckout
     {
-        /// <summary>The pod or container was already running as one made now would be: nothing was made, so there is nothing to report.</summary>
-        AlreadyThere,
         /// <summary>It was already there: the run's volume survived, with every commit and edit on it.</summary>
         Kept,
         /// <summary>It was put back from the checkpoint kept outside the pod: commits and the edits of the last checkpoint.</summary>
@@ -971,33 +955,20 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
         Fresh,
     }
 
-    // What a run that was made again was told, for the loop to put on the run's events.
-    private readonly ConcurrentDictionary<Guid, string> _recoveryNotes = new();
-
-    public string? TakeRecoveryNote(Guid runId) => _recoveryNotes.TryRemove(runId, out var note) ? note : null;
-
-    /// <summary>
-    /// Makes the pod or container of a run again from the request it was made from, and says in the log what of the run's work came back.
-    /// False when there is no request to make it from.
-    /// </summary>
-    protected async Task<bool> RecreateRunAsync(Guid run, CancellationToken ct)
+    public async Task<string?> RecoverAsync(Guid run, CancellationToken ct = default)
     {
-        if (await ReadRunRequestAsync(run, ct) is not { } request) return false;
+        if ((await ReadRunStateAsync(run, ct)).Found || await ReadRunRequestAsync(run, ct) is not { } request) return null;
         // As the start of a run does: the base repository is held while its branches are bundled into the new checkout.
-        using var _ = await BaseRepoClone.LockAsync(request.RepositoryId, ct);
+        using var held = await BaseRepoClone.LockAsync(request.RepositoryId, ct);
+        if ((await ReadRunStateAsync(run, ct)).Found) return null;
         var (_, checkout) = await CreateCoreAsync(request, ct);
-        // A caller that queued behind the one that made it finds it ready: only the one that made it has anything to say.
-        if (checkout == RunCheckout.AlreadyThere) return true;
         var recovered = checkout switch
         {
             RunCheckout.Kept => "its worktree was on the volume that survived, so its commits and uncommitted edits are back",
             RunCheckout.RestoredFromCheckpoint => "its volume was gone too; the worktree was restored from the last checkpoint (commits and edits up to it), and what the run did after it is lost",
             _ => "its volume was gone too and no checkpoint was kept; the worktree was checked out again from the base repository, and commits and edits the run had not pushed are lost",
         };
-        var note = $"The run {Noun} no longer existed and was made again: {recovered}.";
-        _recoveryNotes.AddOrUpdate(run, note, (_, earlier) => $"{earlier} {note}");
-        Logger?.LogWarning("Run {Run}: {Note}", run, note);
-        return true;
+        return $"The run {Noun} no longer existed and was made again: {recovered}.";
     }
 
     // -- Commands ----------------------------------------------------------------
@@ -1740,7 +1711,10 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             switch (target)
             {
                 case LeftoverTarget.Run run:
-                    return await DeleteRunAsync(run.Id, ct);
+                    var request = await ReadRunRequestAsync(run.Id, ct);
+                    if (!await DeleteRunAsync(run.Id, ct)) return false;
+                    await DropCheckpointAsync(run.Id, request, ct);
+                    return true;
                 case LeftoverTarget.SideEnvironment side:
                     return await DeleteSideEnvironmentAsync(side.Name, side.IsInstaller, ct);
                 case LeftoverTarget.OpenRoute route:

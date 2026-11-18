@@ -41,8 +41,12 @@ public interface IRunLifecycle : IRunHostIdentity
     /// </summary>
     Task<bool?> CheckpointAsync(Guid runId, CancellationToken ct = default) => Task.FromResult<bool?>(null);
 
-    /// <summary>What was and was not recovered when the host made the run's lost pod or container again since this was last asked; null when it did not. Taken once.</summary>
-    string? TakeRecoveryNote(Guid runId) => null;
+    /// <summary>
+    /// Make the run's pod or container again when it no longer exists, on its volume if that survived and from its checkpoint if not. Returns what of
+    /// the run's work came back and what did not; null when the environment is there, or the host keeps nothing to make it from (commands in the run
+    /// then fail with <see cref="RunPodLostException"/>). Called before a node runs, never from inside a command: it holds the repository's lock.
+    /// </summary>
+    Task<string?> RecoverAsync(Guid runId, CancellationToken ct = default) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Which run or chat a path or a call belongs to, answered here once, by RunHolders; callers ask the host and never read a path themselves. The defaults are the path format alone (ADR-0032, ADR-0034); only a host that routes by it answers otherwise.</summary>

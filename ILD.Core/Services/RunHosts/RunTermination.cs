@@ -38,9 +38,9 @@ public sealed record RunTermination(
         _ => With("The run's container ended", Detail),
     };
 
-    /// <summary>What a command in a run whose <paramref name="noun"/> (pod or container) is gone and could not be made again is told, with the way on.</summary>
+    /// <summary>What a command in a run whose <paramref name="noun"/> (pod or container) is gone is told, with the way on.</summary>
     public static string LostText(string noun)
-        => $"The run {noun} no longer exists and could not be made again. Retry the node; if that fails, start the work item again. What the run had not pushed and ILD had not checkpointed is lost.";
+        => $"The run {noun} no longer exists. Retry the node: ILD makes the {noun} again with the work it kept. If the retry fails the same way, what the run had not pushed is lost and the work item has to be started again.";
 
     /// <summary>The reason a node that failed this way is parked with: its own for an out-of-memory kill, the generic one for the rest.</summary>
     public string HumanFeedbackReason => Kind == RunTerminationKind.OutOfMemory ? HumanFeedbackReasons.OutOfMemory : HumanFeedbackReasons.NodeFailed;
@@ -63,9 +63,17 @@ public sealed record RunTermination(
     }
 }
 
-/// <summary>A command could not start because the run's pod or container no longer exists and could not be made again. The message says so and what to do.</summary>
+/// <summary>A command could not start because the run's pod or container no longer exists. The message says so and what to do.</summary>
 public sealed class RunPodLostException(Guid run, string text)
     : InvalidOperationException(text)
 {
     public Guid Run { get; } = run;
+
+    /// <summary>The lost pod behind <paramref name="failure"/>, however deep it was wrapped; null when that is not what failed.</summary>
+    public static RunPodLostException? In(Exception failure)
+    {
+        for (var e = failure; e is not null; e = e.InnerException)
+            if (e is RunPodLostException lost) return lost;
+        return null;
+    }
 }

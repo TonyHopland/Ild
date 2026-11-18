@@ -1,3 +1,4 @@
+using ILD.Core.Services.RunHosts;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -16,9 +17,10 @@ public class RecoveryManager : IRecoveryManager
     private readonly ILoopEngine _engine;
     private readonly IEventLogService _eventLog;
     private readonly ILogger<RecoveryManager> _logger;
+    private readonly IRunLifecycle? _host;
     private readonly WorkItemActor _actor;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, BootstrapCredentials instance, ILogger<RecoveryManager>? logger = null)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, BootstrapCredentials instance, ILogger<RecoveryManager>? logger = null, IRunLifecycle? host = null)
     {
         _actor = WorkItemActor.System(instance.Username, "recovery");
         _eventLog = eventLog;
@@ -27,6 +29,7 @@ public class RecoveryManager : IRecoveryManager
         _loopRunStore = loopRunStore;
         _repo = repo;
         _engine = engine;
+        _host = host;
     }
 
     public async Task<IEnumerable<Guid>> GetRecoverableRunIdsAsync()
@@ -75,6 +78,7 @@ public class RecoveryManager : IRecoveryManager
             }
         }
 
+        await LostRunEnvironment.RestoreAsync(_host, _eventLog, _logger, run, run.CurrentNodeId, CancellationToken.None);
         if (!string.IsNullOrWhiteSpace(run.WorktreePath)
             && !await _repo.ValidateWorktreeHealthAsync(run.WorktreePath))
         {

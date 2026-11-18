@@ -14,18 +14,11 @@ public sealed class RunPodLostMiddleware(RequestDelegate next)
         {
             await next(context);
         }
-        catch (Exception ex) when (!context.Response.HasStarted && PodLostIn(ex) is { } lost)
+        catch (Exception ex) when (!context.Response.HasStarted && RunPodLostException.In(ex) is { } lost)
         {
             context.Response.Clear();
             context.Response.StatusCode = StatusCodes.Status409Conflict;
             await context.Response.WriteAsJsonAsync(new { error = lost.Message, code = "run-pod-lost" });
         }
-    }
-
-    internal static RunPodLostException? PodLostIn(Exception ex)
-    {
-        for (var e = ex; e is not null; e = e.InnerException)
-            if (e is RunPodLostException lost) return lost;
-        return null;
     }
 }

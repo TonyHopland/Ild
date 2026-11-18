@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A work item can continue a branch that already exists on origin.** Tick **Continue an existing branch** beside the branch name, and its runs check that branch out, commit on top of it and push to it.
 - **An outside AI with control of work can reorder work items.**
+- **Run pods can be kept off chosen nodes.**
 
 ### Changed
 
@@ -18,8 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Run pods can be kept off chosen nodes, and a work item whose run pod was lost still opens.**
-- **A run whose pod was deleted continues on retry instead of failing.** The pod is made again with the run's work, and a pod that cannot be recovered is reported as lost.
+- **A run whose pod was lost gets it back with its work when its node is retried,** and its work item still opens meanwhile.
 - **A Claude Code or Codex turn that exits cleanly but gives no usable answer still keeps its session,** so the node can be resumed.
 
 ## [0.26.0] - 2026-11-15

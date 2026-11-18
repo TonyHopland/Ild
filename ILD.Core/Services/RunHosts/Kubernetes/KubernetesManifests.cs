@@ -38,7 +38,6 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
 
-    // What the run was made from is kept with it, so a pod that is gone is made again without the loop having to say it twice.
     public V1ConfigMap Owner(Guid ownerId, RunEnvironmentRequest? request = null) => new()
     {
         Metadata = Meta(ownerId),
@@ -245,14 +244,10 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
         return facing == host ? [host] : [host, facing];
     }
 
-    // A cluster autoscaler that drains a node on scale-down skips a pod with this annotation: a run's pod holds the run's work, and a node
-    // that is removed under it takes the pod object with it.
-    internal const string SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict";
-
     public V1Pod Pod(Guid ownerId, V1OwnerReference owner, RunToolEnvironment? tools = null, string? ildAddress = null, bool dns = false, string? nameServer = null)
     {
         var pod = BuildPod(Meta(ownerId, owner), RunPaths.RunRoot(ownerId), RunPaths.HomeDirectory(ownerId), RunNames.Run(ownerId), tools?.For(RunPaths.HomeDirectory(ownerId)), tools?.Zones ?? [], limits: true, ildAddress, dns, nameServer);
-        pod.Metadata.Annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = "false" };
+        pod.Spec.Containers[0].Resources.Requests["memory"] = new(options.RunMemoryRequest);
         if (options.RunNodeSelector.Count > 0) pod.Spec.NodeSelector = options.RunNodeSelector.ToDictionary(p => p.Key, p => p.Value);
         if (options.RunTolerationSeconds is { } seconds)
             pod.Spec.Tolerations = new[] { "node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable" }

@@ -1832,26 +1832,41 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     // -- A run pod that is gone ------------------------------------------------------
 
     [Fact]
-    public async Task A_command_in_a_run_pod_that_was_deleted_makes_the_pod_again_on_the_surviving_volume()
+    public async Task A_run_whose_pod_was_deleted_is_made_again_on_its_surviving_volume_and_what_came_back_is_told()
     {
         await CreateRunAsync();
         var claimName = _api.Get<V1Pod>("pods", Name(_run))!.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName;
-        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Empty(_api.Names("pods"));
         var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        Assert.Empty(_api.Names("pods"));
 
-        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
-        await process.WaitForExitAsync(ct);
+        var recovered = await _host.RecoverAsync(_run, ct);
 
         var fresh = _api.Get<V1Pod>("pods", Name(_run))!;
         Assert.Equal(claimName, fresh.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
         Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
         Assert.Single(_api.Names("persistentvolumeclaims"));
-        Assert.Contains(_log.At(LogLevel.Warning), t => t.Contains("made again") && t.Contains("on the volume that survived"));
+        Assert.Contains("on the volume that survived", recovered);
+        Assert.Null(await _host.RecoverAsync(_run, ct));
     }
 
     [Fact]
-    public async Task A_command_in_a_run_pod_that_is_gone_with_nothing_to_make_it_from_says_the_run_pod_no_longer_exists()
+    public async Task A_command_in_a_run_pod_that_is_gone_says_so_and_does_not_make_the_pod_again()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+
+        var failure = await Assert.ThrowsAsync<RunPodLostException>(
+            () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct));
+
+        Assert.Equal(RunTermination.LostText("pod"), failure.Message);
+        Assert.DoesNotContain("404", failure.Message);
+        Assert.Empty(_api.Names("pods"));
+    }
+
+    [Fact]
+    public async Task A_run_with_no_record_of_what_it_was_made_from_is_not_made_again()
     {
         await CreateRunAsync();
         var client = _api.Client();
@@ -1859,11 +1874,26 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
         await client.CoreV1.DeleteNamespacedConfigMapAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
 
-        var failure = await Assert.ThrowsAsync<RunPodLostException>(
-            () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct));
+        Assert.Null(await _host.RecoverAsync(_run, ct));
+        Assert.Empty(_api.Names("pods"));
+    }
 
-        Assert.Equal(RunTermination.LostText("pod"), failure.Message);
-        Assert.DoesNotContain("404", failure.Message);
+    [Fact]
+    public async Task A_checkpoint_of_a_run_whose_pod_is_gone_keeps_nothing_and_runs_nothing()
+    {
+        await CreateRunAsync();
+        var ct = TestContext.Current.CancellationToken;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        var commands = 0;
+        _api.OnExec = async e =>
+        {
+            commands++;
+            await e.ExitAsync(0);
+        };
+
+        Assert.Null(await _host.CheckpointAsync(_run, ct));
+        Assert.Equal(0, commands);
+        Assert.Empty(_api.Names("pods"));
     }
 
     [Fact]
@@ -1879,14 +1909,6 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
     }
 
     // -- A run with an active work item is never taken down --------------------------
-
-    [Fact]
-    public async Task The_run_pod_asks_a_cluster_autoscaler_not_to_drain_its_node_under_it()
-    {
-        await CreateRunAsync();
-
-        Assert.Equal("false", _api.Get<V1Pod>("pods", Name(_run))!.Metadata.Annotations[KubernetesManifests.SafeToEvictAnnotation]);
-    }
 
     [Fact]
     public async Task The_sweep_and_the_startup_listing_leave_the_pods_of_runs_that_are_halted_failed_or_waiting_alone_and_take_a_deleted_runs()
@@ -1980,9 +2002,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
         await client.CoreV1.DeleteNamespacedPersistentVolumeClaimAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
         _api.ForgetCheckout(Name(_run));
-        // The UI polls several endpoints at once: every caller that meets the missing pod queues on the one that makes it.
-        var processes = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct)));
-        foreach (var process in processes) { await process.WaitForExitAsync(ct); process.Dispose(); }
+        var recovered = await _host.RecoverAsync(_run, ct);
 
         Assert.NotEmpty(restoreBundle!);
         Assert.Equal(committed, GitOut(newClone, "rev-parse", "HEAD"));
@@ -1990,10 +2010,47 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Equal("committed", File.ReadAllText(Path.Combine(newClone, "work.txt")));
         Assert.Equal("edited", File.ReadAllText(Path.Combine(newClone, "a.txt")));
         Assert.Equal("untracked", File.ReadAllText(Path.Combine(newClone, "new.txt")));
-        var note = _host.TakeRecoveryNote(_run);
-        Assert.Contains("restored from the last checkpoint", note);
-        Assert.DoesNotContain("survived", note);
-        Assert.Null(_host.TakeRecoveryNote(_run));
+        Assert.Contains("restored from the last checkpoint", recovered);
+        Assert.Null(await _host.RecoverAsync(_run, ct));
+    }
+
+    [Fact]
+    public async Task A_checkpoint_is_not_given_to_another_run_and_goes_when_the_sweep_takes_its_run()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var baseRepo = MakeBaseRepository();
+        var podClone = Path.Combine(_scratch, "pod");
+        Git(_scratch, "clone", "-q", baseRepo, podClone);
+        File.WriteAllText(Path.Combine(podClone, "new.txt"), "untracked");
+        byte[]? given = null;
+        _api.OnExec = async e =>
+        {
+            if (e.Command.Contains(ExecRunHost.CheckpointScript))
+            {
+                var (code, bundle, _) = RunLocal(ExecRunHost.CheckpointScript, null, podClone);
+                await e.WriteStdoutBytesAsync(bundle);
+                await e.ExitAsync(code);
+                return;
+            }
+            var stdin = e.WantsStdin ? await e.ReadStdinToEndAsync() : null;
+            if (e.Command.Contains(ILD.Core.Services.RunHosts.Local.LocalRunHost.CloneScript)) given = stdin;
+            await e.ExitAsync(0);
+        };
+        await _host.CreateAsync(new RunEnvironmentRequest(_run, baseRepo, "ild/wi-1-run", Repo), ct);
+        Assert.True(await _host.CheckpointAsync(_run, ct));
+        Assert.Contains(_run.ToString("N"), GitOut(baseRepo, "for-each-ref", "refs/ild/runs"));
+
+        await _host.CreateAsync(new RunEnvironmentRequest(Guid.NewGuid(), baseRepo, "ild/wi-2-run", Repo), ct);
+
+        var bundleFile = Path.Combine(_scratch, "given.bundle");
+        File.WriteAllBytes(bundleFile, given!);
+        Assert.DoesNotContain("refs/ild/", GitOut(baseRepo, "bundle", "list-heads", bundleFile));
+
+        foreach (var leftover in await _host.ListLeftoversAsync(new HashSet<Guid>(), ct))
+            await _host.DeleteLeftoverAsync(leftover, ct);
+
+        Assert.Empty(_api.Names("pods"));
+        Assert.Equal("", GitOut(baseRepo, "for-each-ref", "refs/ild/runs"));
     }
 
     private static string GitOut(string cwd, params string[] args)
@@ -2140,7 +2197,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Empty(seen);
         var resources = Installer(Assert.Single(_installerPods.Keys)).Spec.Containers.Single().Resources;
         Assert.Equal("100m", resources.Requests["cpu"].ToString());
-        Assert.Equal("1Gi", resources.Requests["memory"].ToString());
+        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
         Assert.Null(resources.Limits);
     }
 
@@ -2214,7 +2271,7 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         var pod = _api.Get<V1Pod>("pods", SignInPod())!;
         var resources = pod.Spec.Containers.Single().Resources;
         Assert.Equal("100m", resources.Requests["cpu"].ToString());
-        Assert.Equal("1Gi", resources.Requests["memory"].ToString());
+        Assert.Equal("256Mi", resources.Requests["memory"].ToString());
         Assert.Null(resources.Limits);
         Assert.Contains("/wrap", EnvOf(pod, "PATH"));
     }
