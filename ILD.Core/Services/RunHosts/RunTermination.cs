@@ -10,6 +10,8 @@ public enum RunTerminationKind
     Evicted,
     NodeLost,
     Deleted,
+    /// <summary>The pod or container is gone, and nothing says how: what it held that was not kept is lost with it.</summary>
+    PodLost,
     Other,
 }
 
@@ -32,8 +34,13 @@ public sealed record RunTermination(
         RunTerminationKind.Evicted => With("The run's container was evicted by its node", Detail),
         RunTerminationKind.NodeLost => With("The run's container was lost with its node", Detail),
         RunTerminationKind.Deleted => With("The run's container was deleted while a command was running in it", Detail),
+        RunTerminationKind.PodLost => PodLostText,
         _ => With("The run's container ended", Detail),
     };
+
+    /// <summary>What a run whose pod or container no longer exists is told, with the way on.</summary>
+    public const string PodLostText =
+        "The run pod no longer exists. Retry the node: ILD makes the pod again and restores the worktree from the volume or the last checkpoint it kept, and says what it could not recover.";
 
     /// <summary>The reason a node that failed this way is parked with: its own for an out-of-memory kill, the generic one for the rest.</summary>
     public string HumanFeedbackReason => Kind == RunTerminationKind.OutOfMemory ? HumanFeedbackReasons.OutOfMemory : HumanFeedbackReasons.NodeFailed;
@@ -54,4 +61,11 @@ public sealed record RunTermination(
         if (bytes >= Mi) return bytes % Mi == 0 ? $"{bytes / Mi}Mi" : ((double)bytes / Mi).ToString("0.#", CultureInfo.InvariantCulture) + "Mi";
         return bytes.ToString(CultureInfo.InvariantCulture) + "B";
     }
+}
+
+/// <summary>A command could not start because the run's pod or container no longer exists and could not be made again. The message says so and what to do.</summary>
+public sealed class RunPodLostException(Guid run, string text)
+    : InvalidOperationException(text)
+{
+    public Guid Run { get; } = run;
 }

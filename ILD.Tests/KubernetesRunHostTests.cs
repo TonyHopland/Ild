@@ -1829,6 +1829,55 @@ public sealed class KubernetesRunHostTests : IAsyncLifetime
         Assert.Single(_api.Names("persistentvolumeclaims"));
     }
 
+    // -- A run pod that is gone ------------------------------------------------------
+
+    [Fact]
+    public async Task A_command_in_a_run_pod_that_was_deleted_makes_the_pod_again_on_the_surviving_volume()
+    {
+        await CreateRunAsync();
+        var claimName = _api.Get<V1Pod>("pods", Name(_run))!.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName;
+        await _api.Client().CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Empty(_api.Names("pods"));
+        var ct = TestContext.Current.CancellationToken;
+
+        using var process = await _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct);
+        await process.WaitForExitAsync(ct);
+
+        var fresh = _api.Get<V1Pod>("pods", Name(_run))!;
+        Assert.Equal(claimName, fresh.Spec.Volumes.Single(v => v.Name == "work").PersistentVolumeClaim.ClaimName);
+        Assert.Equal(2, _api.Created.Count(c => c == $"pods/{Name(_run)}"));
+        Assert.Single(_api.Names("persistentvolumeclaims"));
+        Assert.Contains(_log.At(LogLevel.Warning), t => t.Contains("made again") && t.Contains("on the volume that survived"));
+    }
+
+    [Fact]
+    public async Task A_command_in_a_run_pod_that_is_gone_with_nothing_to_make_it_from_says_the_run_pod_no_longer_exists()
+    {
+        await CreateRunAsync();
+        var client = _api.Client();
+        var ct = TestContext.Current.CancellationToken;
+        await client.CoreV1.DeleteNamespacedPodAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+        await client.CoreV1.DeleteNamespacedConfigMapAsync(Name(_run), FakeKubernetesApi.Namespace, cancellationToken: ct);
+
+        var failure = await Assert.ThrowsAsync<RunPodLostException>(
+            () => _host.StartCommandAsync(RunCommand.Prepared(Command(WorkingDirectory, "echo", "hi"), _run), ct));
+
+        Assert.Equal(RunTermination.PodLostText, failure.Message);
+        Assert.DoesNotContain("404", failure.Message);
+    }
+
+    [Fact]
+    public async Task The_request_a_run_was_made_from_is_kept_in_its_owner_so_a_lost_pod_can_be_made_again()
+    {
+        await CreateRunAsync();
+
+        var owner = _api.Get<V1ConfigMap>("configmaps", Name(_run))!;
+
+        var request = KubernetesManifests.RequestOf(_run, owner);
+        Assert.Equal("ild/wi-1-run", request!.BranchName);
+        Assert.Equal(Repo, request.RepositoryId);
+    }
+
     // -- Installers left by a crash ------------------------------------------------
 
     [Fact]

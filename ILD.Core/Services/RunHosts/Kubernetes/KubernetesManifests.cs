@@ -38,11 +38,26 @@ internal sealed class KubernetesManifests(KubernetesRunHostOptions options, stri
 
     public V1PersistentVolumeClaim ChatClaim() => new() { Metadata = ChatMeta(), Spec = ClaimSpec() };
 
-    public V1ConfigMap Owner(Guid ownerId) => new()
+    // What the run was made from is kept with it, so a pod that is gone is made again without the loop having to say it twice.
+    public V1ConfigMap Owner(Guid ownerId, RunEnvironmentRequest? request = null) => new()
     {
         Metadata = Meta(ownerId),
-        Data = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") },
+        Data = new Dictionary<string, string> { ["run"] = ownerId.ToString("N") }
+            .Concat(request is null ? [] : RequestData(request)).ToDictionary(p => p.Key, p => p.Value),
     };
+
+    private static IEnumerable<KeyValuePair<string, string>> RequestData(RunEnvironmentRequest request) =>
+    [
+        new("basePath", request.BasePath), new("branch", request.BranchName), new("repository", request.RepositoryId.ToString("D")),
+        new("dns", request.Dns ? "true" : "false"), new("keepPreviewData", request.KeepPreviewData ? "true" : "false"),
+    ];
+
+    /// <summary>The request a run's owner ConfigMap was made with; null for one made without (an older run).</summary>
+    public static RunEnvironmentRequest? RequestOf(Guid ownerId, V1ConfigMap owner)
+        => owner.Data is { } d && d.TryGetValue("basePath", out var basePath) && d.TryGetValue("branch", out var branch)
+            && d.TryGetValue("repository", out var repository) && Guid.TryParse(repository, out var repositoryId)
+            ? new RunEnvironmentRequest(ownerId, basePath, branch, repositoryId, d.TryGetValue("dns", out var dns) && dns == "true", d.TryGetValue("keepPreviewData", out var keep) && keep == "true")
+            : null;
 
     public static V1OwnerReference OwnerReference(V1ConfigMap owner) => new()
     {

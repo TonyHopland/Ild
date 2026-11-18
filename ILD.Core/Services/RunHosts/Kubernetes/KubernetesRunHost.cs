@@ -94,7 +94,7 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
     protected override async Task<Func<Task>> MakeRunAsync(RunEnvironmentRequest request, RunToolEnvironment? tools, CancellationToken ct)
     {
         var owner = request.OwnerId;
-        var (ownerObject, madeOwner) = await CreateOwnerAsync(owner, ct);
+        var (ownerObject, madeOwner) = await CreateOwnerAsync(request, ct);
         try
         {
             // A pod that ended (evicted, its node shut down) is replaced from the manifest as it is now, on the claim it had.
@@ -173,11 +173,12 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
         }
     }
 
-    private async Task<(V1ConfigMap Owner, bool Made)> CreateOwnerAsync(Guid owner, CancellationToken ct)
+    private async Task<(V1ConfigMap Owner, bool Made)> CreateOwnerAsync(RunEnvironmentRequest request, CancellationToken ct)
     {
+        var owner = request.OwnerId;
         try
         {
-            return (await _client.CoreV1.CreateNamespacedConfigMapAsync(_manifests.Owner(owner), _namespace, cancellationToken: ct), true);
+            return (await _client.CoreV1.CreateNamespacedConfigMapAsync(_manifests.Owner(owner, request), _namespace, cancellationToken: ct), true);
         }
         catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict)
         {
@@ -422,7 +423,24 @@ public sealed class KubernetesRunHost : ExecRunHost, IDirectRouteEngine, IChatEn
 
     // A pod nothing restarts (RestartPolicy Never) that was evicted or lost its node: made again once, then the command retried.
     protected override async Task<bool> ReviveRunAsync(Guid run, Exception failure, CancellationToken ct)
-        => !ct.IsCancellationRequested && await ReplaceEndedRunPodAsync(run, ct);
+    {
+        if (ct.IsCancellationRequested) return false;
+        if (await ReplaceEndedRunPodAsync(run, ct)) return true;
+        // A pod that is not there at all: made again from the request kept in the run's ConfigMap, on the volume if it survived.
+        return await ReadPodOrNullAsync(RunNames.Run(run), ct) is null && await RecreateRunAsync(run, ct);
+    }
+
+    protected override async Task<RunEnvironmentRequest?> ReadRunRequestAsync(Guid run, CancellationToken ct)
+    {
+        try
+        {
+            return KubernetesManifests.RequestOf(run, await _client.CoreV1.ReadNamespacedConfigMapAsync(RunNames.Run(run), _namespace, cancellationToken: ct));
+        }
+        catch (HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
 
     // -- Direct route (network mode Off) ------------------------------------------
 
