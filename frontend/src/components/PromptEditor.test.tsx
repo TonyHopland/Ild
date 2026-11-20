@@ -77,7 +77,7 @@ describe("PromptEditor", () => {
 
     fireEvent.keyDown(textarea, { key });
 
-    expect(onChange).toHaveBeenCalledWith("{{WorkItem.Title}}");
+    expect(onChange).toHaveBeenCalledWith("{{WorkItem.Id}}");
   });
 
   test("pressing Escape hides suggestions", () => {
@@ -94,7 +94,7 @@ describe("PromptEditor", () => {
     fireEvent.keyDown(textarea, { key: "ArrowDown" });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(onChange).toHaveBeenCalledWith("{{WorkItem.Description}}");
+    expect(onChange).toHaveBeenCalledWith("{{WorkItem.Title}}");
   });
 
   test("ArrowUp cycles backwards to the last suggestion", () => {
