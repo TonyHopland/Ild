@@ -85,6 +85,7 @@ public sealed class PromptRenderingService : IPromptRenderingService
         var workTreeFiles = await _resolver.ReadWorkTreeFilesAsync(template, workItem.WorktreePath);
 
         return _resolver.Render(template, new PromptContext(
+            WorkItemId: workItem.Id,
             WorkItemTitle: workItem.Title,
             WorkItemDescription: workItem.Description,
             PreviousNodeOutput: previousNodeOutput,

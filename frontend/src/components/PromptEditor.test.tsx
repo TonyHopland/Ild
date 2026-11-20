@@ -27,6 +27,7 @@ const suggestions = () => screen.getAllByRole("listitem").map((li) => li.textCon
 const suggestedKeys = () => suggestions().map((text) => text.match(/\{\{[^}]*\}\}/)![0]);
 
 const BUILT_IN = [
+  "{{WorkItem.Id}}",
   "{{WorkItem.Title}}",
   "{{WorkItem.Description}}",
   "{{EventLog.Summary}}",
@@ -51,7 +52,7 @@ describe("PromptEditor", () => {
   test.each([
     ["{{Conversation.", ["Conversation.Full", "Conversation.AI", "Conversation.Human"]],
     ["{{Var", ["{{Var.}}"]],
-    ["{{WorkItem.", ["WorkItem.Title", "WorkItem.Description"]],
+    ["{{WorkItem.", ["WorkItem.Id", "WorkItem.Title", "WorkItem.Description"]],
     ["{{Eve", ["EventLog.Summary", "EventLog.LastN"]],
     ["{{Gl", ["{{Global.}}"]],
   ])("typing %s narrows the suggestions in order", (prefix, expected) => {

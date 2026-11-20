@@ -38,6 +38,14 @@ public class PromptTemplateResolverTests
     }
 
     [Fact]
+    public void Render_substitutes_the_work_item_id_without_scanning_it_again()
+    {
+        var ctx = new PromptContext(WorkItemId: "{{WorkItem.Title}}", WorkItemTitle: "never");
+
+        Assert.Equal("id={{WorkItem.Title}}", Resolver.Render("id={{WorkItem.Id}}", ctx));
+    }
+
+    [Fact]
     public void Render_emits_empty_for_a_loop_variable_not_yet_set()
     {
         // The producing node may run after this template is rendered, so an
