@@ -67,6 +67,7 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
         var summary = context.EventLogSummary ?? Array.Empty<string>();
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
+            ["WorkItem.Id"] = context.WorkItemId,
             ["WorkItem.Title"] = context.WorkItemTitle,
             ["WorkItem.Description"] = context.WorkItemDescription,
             ["WorkTree.Diff"] = "",

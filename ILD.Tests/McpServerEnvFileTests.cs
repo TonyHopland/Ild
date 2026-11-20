@@ -23,6 +23,7 @@ public sealed class McpServerEnvFileTests : IDisposable
         ["ILD_API_TOKEN"] = "env-token",
         ["ILD_LOOP_RUN_ID"] = "env-run",
         ["ILD_CHAT_SESSION_ID"] = "env-chat",
+        ["ILD_WORK_ITEM_ID"] = "env-wi",
     };
 
     [Fact]
@@ -33,14 +34,15 @@ public sealed class McpServerEnvFileTests : IDisposable
               "ILD_API_URL": "http://file.example:5000",
               "ILD_API_TOKEN": "file-token",
               "ILD_LOOP_RUN_ID": "file-run",
-              "ILD_CHAT_SESSION_ID": "file-chat"
+              "ILD_CHAT_SESSION_ID": "file-chat",
+              "ILD_WORK_ITEM_ID": "file-wi"
             }
             """);
         var log = new StringWriter();
 
         var options = IldClientOptions.Resolve(Environment(file), log);
 
-        Assert.Equal(new IldClientOptions("http://file.example:5000", "file-token", "file-run", "file-chat"), options);
+        Assert.Equal(new IldClientOptions("http://file.example:5000", "file-token", "file-run", "file-chat", "file-wi"), options);
         Assert.Empty(log.ToString());
     }
 
@@ -50,10 +52,10 @@ public sealed class McpServerEnvFileTests : IDisposable
         var log = new StringWriter();
 
         Assert.Equal(
-            new IldClientOptions("http://env.example:5000", "env-token", "env-run", "env-chat"),
+            new IldClientOptions("http://env.example:5000", "env-token", "env-run", "env-chat", "env-wi"),
             IldClientOptions.Resolve(Environment(file: null), log));
         Assert.Equal(
-            new IldClientOptions("http://localhost:5000", "", null, null),
+            new IldClientOptions("http://localhost:5000", "", null, null, null),
             IldClientOptions.Resolve(_ => null, log));
         Assert.Empty(log.ToString());
     }
@@ -75,7 +77,7 @@ public sealed class McpServerEnvFileTests : IDisposable
 
         var options = IldClientOptions.Resolve(Environment(file), log);
 
-        Assert.Equal(new IldClientOptions("http://env.example:5000", "env-token", "env-run", "env-chat"), options);
+        Assert.Equal(new IldClientOptions("http://env.example:5000", "env-token", "env-run", "env-chat", "env-wi"), options);
         Assert.False(string.IsNullOrWhiteSpace(log.ToString()));
     }
 

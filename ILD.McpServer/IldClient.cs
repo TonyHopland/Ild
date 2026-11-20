@@ -5,7 +5,7 @@ using ModelContextProtocol;
 namespace ILD.McpServer;
 
 /// <summary>Where the server calls the ILD API, with which token, and for which run or chat.</summary>
-public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null, bool ConcealApiUrl = false)
+public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null, string? WorkItemId = null, bool ConcealApiUrl = false)
 {
     /// <summary>Names a JSON object holding the settings, for an agent CLI that cannot set a server's environment.</summary>
     public const string EnvFileVariable = "ILD_MCP_ENV_FILE";
@@ -37,7 +37,8 @@ public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? Lo
             get("ILD_API_URL") ?? DefaultApiUrl,
             get("ILD_API_TOKEN") ?? "",
             get("ILD_LOOP_RUN_ID"),
-            get("ILD_CHAT_SESSION_ID"));
+            get("ILD_CHAT_SESSION_ID"),
+            get("ILD_WORK_ITEM_ID"));
 
     private static Dictionary<string, string>? ReadSettingsFile(string path, out string problem)
     {
@@ -95,6 +96,9 @@ public sealed class IldClient
     }
 
     public string? LoopRunId => _opts.LoopRunId;
+
+    /// <summary>The work item of the loop run this server serves; null in a chat or an external session.</summary>
+    public string? WorkItemId => _opts.WorkItemId;
 
     public Task<string> GetRawAsync(string path, CancellationToken ct = default)
         => SendAsync("GET", path, () => _http.GetAsync(path, ct), ReadTextAsync, ct);

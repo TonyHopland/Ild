@@ -95,7 +95,7 @@ public static class IldMcpServer
     /// an optional API token, and the originating context id. When
     /// <paramref name="chatSessionId"/> is set the server is told the chat session
     /// id (so created work items are stamped with it); otherwise it is told the
-    /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
+    /// current loop-run id and that run's work item id (the preview tools' default). Returned as a loosely-typed dictionary so each adapter
     /// can splice it directly into its CLI config JSON.
     /// </summary>
     /// <param name="environment">Where the URL and token come from; the process environment by default. A launch passes its <see cref="Adapters.RunFacingEnvironment"/>, whose token is the one ILD issued for that launch.</param>
@@ -115,7 +115,10 @@ public static class IldMcpServer
         if (chatSessionId is { } chatId)
             env["ILD_CHAT_SESSION_ID"] = chatId.ToString();
         else if (runContext != null)
+        {
             env["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
+            env["ILD_WORK_ITEM_ID"] = runContext.WorkItemId;
+        }
 
         return env;
     }

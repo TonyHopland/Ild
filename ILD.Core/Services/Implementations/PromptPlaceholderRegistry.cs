@@ -21,6 +21,7 @@ public static class PromptPlaceholderRegistry
     public static readonly IReadOnlySet<string> KnownNames =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
+            "WorkItem.Id",
             "WorkItem.Title",
             "WorkItem.Description",
             "WorkTree.Diff",

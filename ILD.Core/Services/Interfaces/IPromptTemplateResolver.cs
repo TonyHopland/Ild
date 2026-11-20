@@ -29,6 +29,7 @@ public interface IPromptTemplateResolver
 /// at call sites; any field can be omitted (defaults to empty / null).
 /// </summary>
 public sealed record PromptContext(
+    string? WorkItemId = null,
     string? WorkItemTitle = null,
     string? WorkItemDescription = null,
     string? PreviousNodeOutput = null,
