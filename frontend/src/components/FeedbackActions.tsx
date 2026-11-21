@@ -118,7 +118,8 @@ export default function FeedbackActions({
     name === "OnSuccess" ? onApprove : name === "OnFailure" ? onReject : () => onEdge(name);
 
   // Respond is the text answer: with a feedback box and nothing typed, there is nothing to send.
-  const needsText = (name: string) => name === "Respond" && input !== undefined && !input.value.trim();
+  const needsText = (name: string) =>
+    name === "Respond" && input !== undefined && !input.value.trim();
 
   const answerFor = (name: string) => () => {
     if (needsText(name)) return;

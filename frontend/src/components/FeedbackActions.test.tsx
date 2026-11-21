@@ -143,7 +143,12 @@ describe("FeedbackActions", () => {
 
   test("Respond is disabled until the feedback box holds text", () => {
     const onEdge = vi.fn();
-    const props = { actions: "OnSuccess,Respond,OnFailure", onApprove: vi.fn(), onReject: vi.fn(), onEdge };
+    const props = {
+      actions: "OnSuccess,Respond,OnFailure",
+      onApprove: vi.fn(),
+      onReject: vi.fn(),
+      onEdge,
+    };
     const box = (value: string) => ({ value, onChange: vi.fn(), placeholder: "", rows: 2 });
     const { rerender } = render(<FeedbackActions {...props} input={box("  ")} />);
     const respond = screen.getByText("Respond") as HTMLButtonElement;
