@@ -1006,6 +1006,8 @@ public class WorkItemsController : ControllerBase
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
+        if (string.IsNullOrWhiteSpace(request.Input))
+            return BadRequest(new { error = "Type an answer before sending." });
 
         return await AnswerAsync(request.RunId,
             runId => _workItemManager.SubmitHumanFeedbackRespondAsync(id, runId, request.Input ?? string.Empty));

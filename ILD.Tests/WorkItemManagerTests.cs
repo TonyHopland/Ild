@@ -1456,6 +1456,40 @@ public class WorkItemManagerTests
             It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \t\n")]
+    public async Task A_blank_Respond_answer_is_refused_and_the_run_stays_waiting_for_a_real_one(string blank)
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        var ex = await Assert.ThrowsAsync<HumanFeedbackRefusedException>(() => mgr.SubmitHumanFeedbackRespondAsync(id, runId, blank));
+
+        Assert.Equal("Type an answer before sending.", ex.Message);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
+        Assert.Equal(LoopRunStatus.WaitingHuman, db.Fresh().LoopRuns.Single(r => r.Id == runId).Status);
+
+        Assert.True(await mgr.SubmitHumanFeedbackRespondAsync(id, runId, "a real answer"));
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, NodeSignal.Custom("Respond", "a real answer"), "a real answer", "Respond", It.IsAny<WorkItemActor?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_second_answer_to_a_question_already_answered_is_refused()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+        var run = db.Context.LoopRuns.Single(r => r.Id == runId);
+        run.Status = LoopRunStatus.Running;
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HumanFeedbackRefusedException>(() => mgr.SubmitHumanFeedbackRespondAsync(id, runId, "again"));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
+    }
+
     [Fact]
     public async Task DeleteAsync_removes_workitem_with_no_dependencies()
     {

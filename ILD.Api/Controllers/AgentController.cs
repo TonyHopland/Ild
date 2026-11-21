@@ -1379,6 +1379,8 @@ public class AgentController : ControllerBase, IActionFilter
             return error!;
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
+        if (string.IsNullOrWhiteSpace(request.Input))
+            return BadRequest(new { error = "Type an answer before sending." });
 
         return await AnswerAsync(request.RunId,
             runId => _workItems.SubmitHumanFeedbackRespondAsync(id, runId, request.Input ?? string.Empty, actor));

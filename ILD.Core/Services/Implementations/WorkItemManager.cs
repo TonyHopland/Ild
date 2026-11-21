@@ -1491,7 +1491,9 @@ public class WorkItemManager : IWorkItemManager
         => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input), answeredBy: answeredBy);
 
     public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null)
-        => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input, answeredBy);
+        => string.IsNullOrWhiteSpace(input)
+            ? throw new HumanFeedbackRefusedException("Type an answer before sending.")
+            : SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input, answeredBy);
 
     public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input, WorkItemActor? answeredBy = null)
         => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input), answeredBy: answeredBy);

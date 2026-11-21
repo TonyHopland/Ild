@@ -16,6 +16,16 @@ namespace ILD.Tests;
 /// </summary>
 public class AiFailureClassifierTests
 {
+    [Fact]
+    public void A_missing_deferred_tool_marker_is_recognised_as_a_resume_the_cli_refused()
+    {
+        const string error = "exit=1 stderr=Error: No deferred tool marker found in the resumed session. Provide a prompt to continue the conversation.";
+
+        Assert.True(AiFailureClassifier.IsResumeMarkerMissing(error));
+        Assert.False(AiFailureClassifier.IsResumeMarkerMissing("exit=1 stderr=boom"));
+        Assert.False(AiFailureClassifier.IsResumeMarkerMissing(null));
+    }
+
     /// <summary>
     /// The literal text a real run was throttled with (WI-50). It arrived as the
     /// agent's output while the error said only "exit=1 stderr=", which is why

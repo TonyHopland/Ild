@@ -158,6 +158,10 @@ public static class AiFailureClassifier
         Rule(@"\b(?:could not|couldn.t|cannot|can.t) (?:find|resume|load) (?:the |that |a )?session\b"),
     };
 
+    /// <summary>Whether the CLI refused a resume because the session had no pending question (a blank or stale answer).</summary>
+    public static bool IsResumeMarkerMissing(string? error)
+        => error is not null && error.Contains("No deferred tool marker found", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Whether a failed start says the session it was asked to resume does not exist.
     /// Read from the adapter's error text only (the stdout tail is the agent's own words).

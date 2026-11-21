@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An empty answer to a human-input request is no longer sent to the run:** Respond waits for text, and an AI prompt that renders empty no longer fails the resume.
 - **A run whose pod was lost gets it back with its work when its node is retried,** and its work item still opens meanwhile.
 - **A Claude Code or Codex turn that exits cleanly but gives no usable answer still keeps its session,** so the node can be resumed.
 

@@ -117,7 +117,11 @@ export default function FeedbackActions({
   const sendOf = (name: string) =>
     name === "OnSuccess" ? onApprove : name === "OnFailure" ? onReject : () => onEdge(name);
 
+  // Respond is the text answer: with a feedback box and nothing typed, there is nothing to send.
+  const needsText = (name: string) => name === "Respond" && input !== undefined && !input.value.trim();
+
   const answerFor = (name: string) => () => {
+    if (needsText(name)) return;
     const send = sendOf(name);
     if (needsConfirm?.(name))
       setAsked({
@@ -192,7 +196,7 @@ export default function FeedbackActions({
         className={`btn btn-sm ${toneOf(name)}${style ? " has-output-color" : ""}`}
         style={style}
         onClick={answerFor(name)}
-        disabled={busy}
+        disabled={busy || needsText(name)}
         aria-keyshortcuts={enterTarget === name ? "Enter" : undefined}
       >
         {style && <span className="output-color-dot" aria-hidden="true" />}
