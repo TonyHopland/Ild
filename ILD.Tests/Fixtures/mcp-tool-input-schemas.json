@@ -341,13 +341,14 @@
     "type": "object",
     "properties": {
       "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
-    },
-    "required": [
-      "workItemId"
-    ]
+    }
   },
   "get_preview_config_schema": {
     "type": "object",
@@ -356,34 +357,40 @@
   "get_preview_logs": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "service": {
         "description": "Service name as declared in ild.config.json.",
         "type": "string"
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
-      "workItemId",
       "service"
     ]
   },
   "get_preview_service_config": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "service": {
         "description": "Service name as declared in ild.config.json.",
         "type": "string"
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
-      "workItemId",
       "service"
     ]
   },
@@ -1115,10 +1122,6 @@
   "start_preview": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "profileName": {
         "description": "Optional profile name; defaults to the config's default profile.",
         "type": [
@@ -1136,19 +1139,20 @@
         "description": "Wait until every service is up (default true). false returns once the start has begun; follow it with get_preview.",
         "type": "boolean",
         "default": true
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
-    },
-    "required": [
-      "workItemId"
-    ]
+    }
   },
   "start_preview_service": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "service": {
         "description": "Service name as declared in ild.config.json.",
         "type": "string"
@@ -1165,10 +1169,17 @@
         "description": "Skip the install steps (default false).",
         "type": "boolean",
         "default": false
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
-      "workItemId",
       "service"
     ]
   },
@@ -1176,28 +1187,32 @@
     "type": "object",
     "properties": {
       "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
-    },
-    "required": [
-      "workItemId"
-    ]
+    }
   },
   "stop_preview_service": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "service": {
         "description": "Service name as declared in ild.config.json.",
         "type": "string"
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
-      "workItemId",
       "service"
     ]
   },
@@ -1216,10 +1231,6 @@
   "update_preview_service_config": {
     "type": "object",
     "properties": {
-      "workItemId": {
-        "description": "Work item GUID (from the Chat Context).",
-        "type": "string"
-      },
       "service": {
         "description": "Service name as declared in ild.config.json.",
         "type": "string"
@@ -1227,10 +1238,17 @@
       "config": {
         "description": "The full service object as JSON.",
         "type": "string"
+      },
+      "workItemId": {
+        "description": "Work item GUID. Defaults to this run's work item.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
-      "workItemId",
       "service",
       "config"
     ]

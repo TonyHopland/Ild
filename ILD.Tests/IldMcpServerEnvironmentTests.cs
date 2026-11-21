@@ -39,6 +39,15 @@ public sealed class IldMcpServerEnvironmentTests : IDisposable
         Assert.Equal("http://api.invalid:1234", env["ILD_API_URL"]);
         Assert.Equal("supplied-token", env["ILD_API_TOKEN"]);
         Assert.Equal(runId.ToString(), env["ILD_LOOP_RUN_ID"]);
+        Assert.Equal("wi", env["ILD_WORK_ITEM_ID"]);
+    }
+
+    [Fact]
+    public void A_chat_session_is_not_given_a_work_item_id()
+    {
+        var env = IldMcpServer.BuildEnvironment(Run(Guid.NewGuid()), Guid.NewGuid(), new TestProcessEnvironment());
+
+        Assert.False(env.ContainsKey("ILD_WORK_ITEM_ID"));
     }
 
     [Fact]

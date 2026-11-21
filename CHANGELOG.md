@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Preview tools work for an agent in a loop run without being told the work item id.** A `{{WorkItem.Id}}` placeholder is also available in prompts.
 - **A work item can continue a branch that already exists on origin.** Tick **Continue an existing branch** beside the branch name, and its runs check that branch out, commit on top of it and push to it.
 - **An outside AI with control of work can reorder work items.**
 - **Run pods can be kept off chosen nodes.**
