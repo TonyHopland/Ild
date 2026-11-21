@@ -85,14 +85,14 @@ public class AINodeExecutorSessionPlaceholderTests
     }
 
     [Fact]
-    public async Task A_prompt_that_renders_empty_resumes_the_session_with_a_neutral_continue_not_a_blank_prompt()
+    public async Task A_prompt_that_renders_empty_resumes_the_session_with_a_no_answer_stand_in_not_a_blank_prompt()
     {
         var (sp, adapter, _) = BuildServices(bindings: new Dictionary<string, string> { ["s"] = "sess-1" });
 
         await RunAsync(sp, MakeRun(), MakeNode(SessionConfig("s")));
 
         Assert.Equal("sess-1", adapter.Captured!.SessionId);
-        Assert.Equal("Continue where you left off.", adapter.Captured.Prompt);
+        Assert.Equal("(no answer given)", adapter.Captured.Prompt);
     }
 
     [Fact]

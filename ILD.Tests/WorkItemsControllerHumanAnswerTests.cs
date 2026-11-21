@@ -7,7 +7,7 @@ using Moq;
 
 namespace ILD.Tests;
 
-/// <summary>A blank text answer is a 400 the person can act on; a stale one stays the 409 "the run moved on".</summary>
+/// <summary>A stale answer is a 409 "the run moved on"; an empty one is not refused.</summary>
 public class WorkItemsControllerHumanAnswerTests
 {
     private static (WorkItemsController controller, Mock<IWorkItemManager> mgr, TestDb db) Build()
@@ -34,28 +34,19 @@ public class WorkItemsControllerHumanAnswerTests
         return obj.Value!.GetType().GetProperty("error")!.GetValue(obj.Value)!.ToString()!;
     }
 
-    [Fact]
-    public async Task A_blank_Respond_is_a_400_with_a_message_on_the_respond_route()
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task An_empty_Respond_is_handed_to_the_manager_on_both_routes_and_accepted(string blank)
     {
         var (controller, mgr, db) = Build();
         using var _ = db;
-        mgr.Setup(m => m.SubmitHumanFeedbackRespondAsync("w", It.IsAny<Guid>(), "  ", null)).ThrowsAsync(new BlankHumanAnswerException());
+        var run = Guid.NewGuid();
+        mgr.Setup(m => m.SubmitHumanFeedbackRespondAsync("w", run, blank, null)).ReturnsAsync(true);
+        mgr.Setup(m => m.SubmitHumanFeedbackEdgeAsync("w", run, "Respond", blank, null)).ReturnsAsync(true);
 
-        var result = await controller.HumanFeedbackRespond("w", new HumanFeedbackInputRequest { RunId = Guid.NewGuid(), Input = "  " });
-
-        Assert.Equal("Type an answer before sending.", Error(result, 400));
-    }
-
-    [Fact]
-    public async Task A_blank_Respond_is_a_400_on_the_edge_route_too()
-    {
-        var (controller, mgr, db) = Build();
-        using var _ = db;
-        mgr.Setup(m => m.SubmitHumanFeedbackEdgeAsync("w", It.IsAny<Guid>(), "Respond", "", null)).ThrowsAsync(new BlankHumanAnswerException());
-
-        var result = await controller.HumanFeedbackEdge("w", new HumanFeedbackEdgeRequest { RunId = Guid.NewGuid(), Name = "Respond", Input = "" });
-
-        Assert.Equal("Type an answer before sending.", Error(result, 400));
+        Assert.IsType<OkResult>(await controller.HumanFeedbackRespond("w", new HumanFeedbackInputRequest { RunId = run, Input = blank }));
+        Assert.IsType<OkResult>(await controller.HumanFeedbackEdge("w", new HumanFeedbackEdgeRequest { RunId = run, Name = "Respond", Input = blank }));
     }
 
     [Fact]

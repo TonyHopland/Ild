@@ -1035,7 +1035,6 @@ public class WorkItemsController : ControllerBase
 
         bool ok;
         try { ok = await deliver(run); }
-        catch (BlankHumanAnswerException ex) { return BadRequest(new { error = ex.Message }); }
         catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         catch (HumanFeedbackRefusedException ex) { return Conflict(new { error = ex.Message }); }
         return ok ? Ok() : NotFound();

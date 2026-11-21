@@ -1528,10 +1528,6 @@ public class WorkItemManager : IWorkItemManager
     private async Task<bool> DeliverHumanFeedbackAsync(
         string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null, WorkItemActor? answeredBy = null)
     {
-        // Respond is the text answer, by whichever route it arrives; the other outputs may be empty.
-        if (string.Equals(answer.EdgeName, "Respond", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(answer.Feedback))
-            throw new BlankHumanAnswerException();
-
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
         var active = await _loopRunStore.GetActiveByWorkItemAsync(workItemId)

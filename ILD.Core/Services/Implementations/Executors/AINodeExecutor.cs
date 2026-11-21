@@ -190,7 +190,7 @@ public sealed class AINodeExecutor : INodeExecutor
             // empty human answer) is never sent into a resumed session: the CLI
             // rejects a blank resume with an error nobody can act on.
             if (string.IsNullOrWhiteSpace(rendered) && !string.IsNullOrWhiteSpace(incomingSessionId))
-                rendered = "Continue where you left off.";
+                rendered = "(no answer given)";
             var runContext = new LoopRunContext(
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,

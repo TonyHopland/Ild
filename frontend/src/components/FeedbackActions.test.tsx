@@ -141,26 +141,6 @@ describe("FeedbackActions", () => {
     expect(onReject).toHaveBeenCalledTimes(1);
   });
 
-  test("Respond is disabled until the feedback box holds text", () => {
-    const onEdge = vi.fn();
-    const props = {
-      actions: "OnSuccess,Respond,OnFailure",
-      onApprove: vi.fn(),
-      onReject: vi.fn(),
-      onEdge,
-    };
-    const box = (value: string) => ({ value, onChange: vi.fn(), placeholder: "", rows: 2 });
-    const { rerender } = render(<FeedbackActions {...props} input={box("  ")} />);
-    const respond = screen.getByText("Respond") as HTMLButtonElement;
-    expect(respond.disabled).toBe(true);
-    expect((screen.getByText("Approve") as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(respond);
-    expect(onEdge).not.toHaveBeenCalled();
-    rerender(<FeedbackActions {...props} input={box("yes")} />);
-    fireEvent.click(screen.getByText("Respond"));
-    expect(onEdge).toHaveBeenCalledWith("Respond");
-  });
-
   test("Merge and its confirmation work with every output hidden", () => {
     const onMerge = vi.fn();
     render(
