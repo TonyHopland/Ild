@@ -1465,7 +1465,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
 
-        var ex = await Assert.ThrowsAsync<HumanFeedbackRefusedException>(() => mgr.SubmitHumanFeedbackRespondAsync(id, runId, blank));
+        var ex = await Assert.ThrowsAsync<BlankHumanAnswerException>(() => mgr.SubmitHumanFeedbackRespondAsync(id, runId, blank));
 
         Assert.Equal("Type an answer before sending.", ex.Message);
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
@@ -1473,6 +1473,45 @@ public class WorkItemManagerTests
 
         Assert.True(await mgr.SubmitHumanFeedbackRespondAsync(id, runId, "a real answer"));
         engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, NodeSignal.Custom("Respond", "a real answer"), "a real answer", "Respond", It.IsAny<WorkItemActor?>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("Respond", "")]
+    [InlineData("respond", "  \n")]
+    public async Task A_blank_Respond_through_the_edge_route_is_refused_too(string edge, string blank)
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        await Assert.ThrowsAsync<BlankHumanAnswerException>(() => mgr.SubmitHumanFeedbackEdgeAsync(id, runId, edge, blank));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_blank_answer_to_an_output_other_than_Respond_is_still_delivered()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        Assert.True(await mgr.SubmitHumanFeedbackEdgeAsync(id, runId, "Escalate", ""));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, It.IsAny<Guid>(), It.IsAny<NodeSignal>(), "", "Escalate", It.IsAny<WorkItemActor?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_answer_to_an_earlier_visit_of_the_node_on_the_same_run_is_refused()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        await Assert.ThrowsAsync<HumanFeedbackRefusedException>(
+            () => mgr.SubmitHumanFeedbackAnswerAsync(id, runId, Guid.NewGuid(), "Respond", "late answer"));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
     }
 
     [Fact]

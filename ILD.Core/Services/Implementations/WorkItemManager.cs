@@ -1491,9 +1491,7 @@ public class WorkItemManager : IWorkItemManager
         => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Rejection(input), answeredBy: answeredBy);
 
     public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input, WorkItemActor? answeredBy = null)
-        => string.IsNullOrWhiteSpace(input)
-            ? throw new HumanFeedbackRefusedException("Type an answer before sending.")
-            : SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input, answeredBy);
+        => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input, answeredBy);
 
     public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input, WorkItemActor? answeredBy = null)
         => DeliverHumanFeedbackAsync(workItemId, runId, HumanAnswer.Edge(edgeName, input), answeredBy: answeredBy);
@@ -1530,6 +1528,10 @@ public class WorkItemManager : IWorkItemManager
     private async Task<bool> DeliverHumanFeedbackAsync(
         string workItemId, Guid runId, HumanAnswer answer, Guid? expectedRunNodeId = null, WorkItemActor? answeredBy = null)
     {
+        // Respond is the text answer, by whichever route it arrives; the other outputs may be empty.
+        if (string.Equals(answer.EdgeName, "Respond", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(answer.Feedback))
+            throw new BlankHumanAnswerException();
+
         if (await GetWorkItemAsync(workItemId) is null) return false;
 
         var active = await _loopRunStore.GetActiveByWorkItemAsync(workItemId)

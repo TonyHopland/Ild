@@ -1379,8 +1379,6 @@ public class AgentController : ControllerBase, IActionFilter
             return error!;
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
-        if (string.IsNullOrWhiteSpace(request.Input))
-            return BadRequest(new { error = "Type an answer before sending." });
 
         return await AnswerAsync(request.RunId,
             runId => _workItems.SubmitHumanFeedbackRespondAsync(id, runId, request.Input ?? string.Empty, actor));
@@ -1422,6 +1420,7 @@ public class AgentController : ControllerBase, IActionFilter
 
         bool ok;
         try { ok = await deliver(run); }
+        catch (BlankHumanAnswerException ex) { return BadRequest(new { error = ex.Message }); }
         catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         catch (HumanFeedbackRefusedException ex) { return Conflict(new { error = ex.Message }); }
         return ok ? Ok() : NotFound();
