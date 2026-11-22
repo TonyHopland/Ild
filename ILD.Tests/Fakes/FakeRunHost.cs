@@ -263,23 +263,32 @@ internal sealed class FakeRunHost : IRunHost
     /// <summary>Directory links planted on this host, link path to target; a path with none on it resolves to itself.</summary>
     public Dictionary<string, string> Links { get; } = new(StringComparer.Ordinal);
 
-    public Task<string?> ResolveLinksAsync(string path, CancellationToken ct = default)
+    /// <summary>How many times links were resolved, each call for however many paths.</summary>
+    public int ResolveLinksCalls { get; private set; }
+
+    public Task<IReadOnlyList<string?>> ResolveLinksAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
     {
         lock (_gate)
         {
-            var resolved = "/";
-            var hops = 0;
-            foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
-            {
-                resolved = resolved == "/" ? "/" + segment : resolved + "/" + segment;
-                while (Links.TryGetValue(resolved, out var target))
-                {
-                    if (++hops > 40) return Task.FromResult<string?>(null);
-                    resolved = target;
-                }
-            }
-            return Task.FromResult<string?>(resolved);
+            ResolveLinksCalls++;
+            return Task.FromResult<IReadOnlyList<string?>>(paths.Select(ResolveLinks).ToList());
         }
+    }
+
+    private string? ResolveLinks(string path)
+    {
+        var resolved = "/";
+        var hops = 0;
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            resolved = resolved == "/" ? "/" + segment : resolved + "/" + segment;
+            while (Links.TryGetValue(resolved, out var target))
+            {
+                if (++hops > 40) return null;
+                resolved = target;
+            }
+        }
+        return resolved;
     }
 
     public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)

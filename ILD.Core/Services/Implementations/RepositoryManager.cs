@@ -983,20 +983,21 @@ public class RepositoryManager : IRepositoryManager
 
     /// <summary>
     /// Where <paramref name="relativePath"/> actually lands inside
-    /// <paramref name="worktreePath"/> (with the root it was measured against), or null if that is outside it. Links are
+    /// <paramref name="worktreePath"/>, or null if that is outside it. Links are
     /// followed before the boundary is drawn, on both sides: a lexical check
     /// answers where a path was spelled, not where it leads, so a link planted
     /// in the worktree pointing out of it would otherwise be a way through —
     /// one the write side would follow, carrying the user's text with it.
-    /// Links are followed on the host that holds the worktree: for a container or
-    /// pod run the path does not exist on ILD's own disk.
+    /// Links are followed on the host that holds the worktree, in one call for
+    /// both paths: for a container or pod run the path does not exist on ILD's
+    /// own disk. The root returned is the worktree's own, links followed, for
+    /// the caller that must tell which top-level entry the path is under (the
+    /// <c>.git</c> check in <see cref="ReadWorktreeFileCappedAsync"/>).
     /// </summary>
     private async Task<(string Root, string Full)?> ResolveSafePathAsync(string worktreePath, string relativePath)
     {
-        var root = await _host.ResolveLinksAsync(Path.GetFullPath(worktreePath));
-        if (root == null) return null;
-        var full = await _host.ResolveLinksAsync(Path.GetFullPath(Path.Combine(root, relativePath)));
-        if (full == null) return null;
+        var resolved = await _host.ResolveLinksAsync([Path.GetFullPath(worktreePath), Path.GetFullPath(Path.Combine(worktreePath, relativePath))]);
+        if (resolved[0] is not { } root || resolved[1] is not { } full) return null;
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? (root, full) : null;
     }

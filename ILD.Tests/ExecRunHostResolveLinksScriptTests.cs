@@ -5,8 +5,8 @@ using ILD.Core.Services.RunHosts.Isolated;
 namespace ILD.Tests;
 
 /// <summary>
-/// The script that follows the links on a path in a run's environment, run by sh on a temp directory: once with the tools of
-/// the image, and once with none on the path, as on an image whose <c>realpath</c> and <c>readlink</c> lack <c>-m</c>.
+/// The script that follows the links on paths in a run's environment, run by sh on a temp directory: once with the tools of
+/// the image, and once with none on the path, as on an image whose <c>realpath</c> lacks <c>-m</c>.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public sealed class ExecRunHostResolveLinksScriptTests : IDisposable
@@ -26,12 +26,14 @@ public sealed class ExecRunHostResolveLinksScriptTests : IDisposable
 
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
-    private (int Exit, string StdOut) Run(string path, bool withTools)
+    private (int Exit, string StdOut) Run(string path, bool withTools) => Run([path], withTools);
+
+    private (int Exit, string StdOut) Run(string[] paths, bool withTools)
     {
         Assert.SkipUnless(OperatingSystem.IsLinux(), "needs Linux with sh");
         var psi = new ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true };
         if (!withTools) psi.Environment["PATH"] = "";
-        foreach (var a in new[] { "-c", ExecRunHost.ResolveLinksScript, "sh", path }) psi.ArgumentList.Add(a);
+        foreach (var a in new[] { "-c", ExecRunHost.ResolveLinksScript, "sh" }.Concat(paths)) psi.ArgumentList.Add(a);
         using var process = Process.Start(psi)!;
         var output = process.StandardOutput.ReadToEnd();
         process.StandardError.ReadToEnd();
@@ -58,6 +60,13 @@ public sealed class ExecRunHostResolveLinksScriptTests : IDisposable
     }
 
     [Fact]
-    public void Without_the_tools_a_link_that_leads_nowhere_is_refused_rather_than_guessed_at()
-        => Assert.NotEqual(0, Run(Path.Combine(_dir, "dangling"), withTools: false).Exit);
+    public void Without_the_tools_each_path_gets_a_line_and_a_link_that_leads_nowhere_is_refused_rather_than_guessed_at()
+    {
+        var paths = new[] { Path.Combine(_dir, "out", "etc"), Path.Combine(_dir, "dangling"), Path.Combine(_dir, "shortcut") };
+
+        var (exit, output) = Run(paths, withTools: false);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["/etc", "", Path.Combine(_dir, "inside")], output.Split('\n'));
+    }
 }

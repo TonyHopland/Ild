@@ -1426,6 +1426,19 @@ public sealed class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_worktree_file_operation_asks_the_host_to_resolve_links_once()
+    {
+        const string root = "/ild-run/abc/repo";
+        var (mgr, host) = ContainerRun(root);
+
+        await mgr.ReadWorktreeFileCappedAsync(root, "shortcut/a.txt", 1024);
+        Assert.Equal(1, host.ResolveLinksCalls);
+
+        await mgr.OpenWorktreeFileAsync(root, "inside/a.txt");
+        Assert.Equal(2, host.ResolveLinksCalls);
+    }
+
+    [Fact]
     public async Task A_link_that_stays_inside_a_container_worktree_is_followed()
     {
         const string root = "/ild-run/abc/repo";
