@@ -186,6 +186,11 @@ public sealed class AINodeExecutor : INodeExecutor
             // the halt, regardless of the node's UseSession/fork config.
             if (isSteering)
                 incomingSessionId = ctx.Run.CurrentAiSessionId;
+            // A prompt that renders to nothing (say, {{PreviousNodeOutput}} after an
+            // empty human answer) is never sent into a resumed session: the CLI
+            // rejects a blank resume with an error nobody can act on.
+            if (string.IsNullOrWhiteSpace(rendered) && !string.IsNullOrWhiteSpace(incomingSessionId))
+                rendered = "(no answer given)";
             var runContext = new LoopRunContext(
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,
@@ -303,7 +308,10 @@ public sealed class AINodeExecutor : INodeExecutor
                     InterruptedReason(ctx.Run.CurrentAiSessionId, result.Error), result.Output, resetAt);
                 yield break;
             }
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output, result.Termination);
+            var error = AiFailureClassifier.IsResumeMarkerMissing(result.Error)
+                ? "The agent session could not be resumed with that answer. Send a text answer or restart the node."
+                : result.Error ?? "AI adapter failed";
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure, error, result.Output, result.Termination);
         }
     }
 

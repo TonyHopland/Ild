@@ -1456,6 +1456,64 @@ public class WorkItemManagerTests
             It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData("Respond", "")]
+    [InlineData("Respond", "   \t\n")]
+    [InlineData("respond", "")]
+    [InlineData("Escalate", "")]
+    public async Task An_empty_or_whitespace_answer_on_the_edge_route_is_delivered_so_the_run_resumes(string edge, string blank)
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        Assert.True(await mgr.SubmitHumanFeedbackEdgeAsync(id, runId, edge, blank));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, NodeSignal.Custom(edge, blank), blank, edge, It.IsAny<WorkItemActor?>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \t\n")]
+    public async Task An_empty_or_whitespace_Respond_is_delivered_so_the_run_resumes(string blank)
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        Assert.True(await mgr.SubmitHumanFeedbackRespondAsync(id, runId, blank));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, NodeSignal.Custom("Respond", blank), blank, "Respond", It.IsAny<WorkItemActor?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_answer_to_an_earlier_visit_of_the_node_on_the_same_run_is_refused()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        await Assert.ThrowsAsync<HumanFeedbackRefusedException>(
+            () => mgr.SubmitHumanFeedbackAnswerAsync(id, runId, Guid.NewGuid(), "Respond", "late answer"));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_second_answer_to_a_question_already_answered_is_refused()
+    {
+        var (mgr, db, repoId, _, _) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, _) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+        var run = db.Context.LoopRuns.Single(r => r.Id == runId);
+        run.Status = LoopRunStatus.Running;
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HumanFeedbackRefusedException>(() => mgr.SubmitHumanFeedbackRespondAsync(id, runId, "again"));
+
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorkItemActor?>()), Times.Never);
+    }
+
     [Fact]
     public async Task DeleteAsync_removes_workitem_with_no_dependencies()
     {

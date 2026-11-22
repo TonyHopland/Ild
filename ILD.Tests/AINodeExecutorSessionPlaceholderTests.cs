@@ -85,6 +85,17 @@ public class AINodeExecutorSessionPlaceholderTests
     }
 
     [Fact]
+    public async Task A_prompt_that_renders_empty_resumes_the_session_with_a_no_answer_stand_in_not_a_blank_prompt()
+    {
+        var (sp, adapter, _) = BuildServices(bindings: new Dictionary<string, string> { ["s"] = "sess-1" });
+
+        await RunAsync(sp, MakeRun(), MakeNode(SessionConfig("s")));
+
+        Assert.Equal("sess-1", adapter.Captured!.SessionId);
+        Assert.Equal("(no answer given)", adapter.Captured.Prompt);
+    }
+
+    [Fact]
     public async Task Templated_placeholder_binds_under_the_resolved_name()
     {
         var (sp, _, _) = BuildServices(variables: new Dictionary<string, string> { ["ticket"] = "42" });
