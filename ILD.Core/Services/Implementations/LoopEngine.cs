@@ -1213,8 +1213,8 @@ public sealed partial class LoopEngine : ILoopEngine
                         {
                             // A named output with no edge wired from it is a
                             // template wiring error, not a graph terminus: fail the
-                            // node so the human can wire it. The default OnSuccess
-                            // sink still completes the run.
+                            // node so the human can wire it. Any other result with no
+                            // edge is a dead end: only a Cleanup node ends a run.
                             if (ok.Edge == EdgeType.Custom && !string.IsNullOrEmpty(ok.EdgeName))
                             {
                                 // Unlinked: this execution succeeded and its own turn
@@ -1223,7 +1223,10 @@ public sealed partial class LoopEngine : ILoopEngine
                                     node, runNodeId: null);
                                 return ParkResult.Stop;
                             }
-                            return await CompleteRunAsync(run, loopRunStore, workItems, eventLog);
+                            // Only a Cleanup node ends a run. Any other node whose
+                            // result has no edge is a dead end in the template.
+                            await ParkOnDeadEndAsync(run, loopRunStore, sp, node, runNodeId, ok.Edge);
+                            return ParkResult.Stop;
                         }
                         run.CurrentNodeId = successEdge.TargetNodeId;
                         run.IncomingEdgeId = successEdge.Id;
@@ -1756,6 +1759,21 @@ public sealed partial class LoopEngine : ILoopEngine
         if (!IsAlive(run.Status)) return;
         await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, humanFeedbackReason,
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
+    }
+
+    /// <summary>
+    /// Park a run whose node finished with a result no edge leaves from. Only a
+    /// Cleanup node completes a run, so this is a template wiring error: the run
+    /// waits (not halted) for a person to clean it up, and the work item is not
+    /// moved to Done.
+    /// </summary>
+    private async Task ParkOnDeadEndAsync(
+        LoopRun run, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId, EdgeType edge)
+    {
+        if (!IsAlive(run.Status)) return;
+        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, HumanFeedbackReasons.DeadEnd,
+            $"Dead end: \"{node.Label}\" finished with {edge}, which has no outgoing edge",
+            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 
     private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromMinutes(2);

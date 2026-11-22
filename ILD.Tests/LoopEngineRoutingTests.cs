@@ -148,6 +148,10 @@ public class LoopEngineRoutingTests
         h.AddNode("h", NodeType.Human);
         h.AddNode("after", NodeType.Cmd);
         h.AddEdge("h", "after", EdgeType.Custom, "Respond");
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("after", "c", EdgeType.OnSuccess);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("cleanup"), new NodeOutcome.Terminal("done")));
 
         var humanExec = new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("ask"),
@@ -177,8 +181,8 @@ public class LoopEngineRoutingTests
         Assert.Equal(LoopRunStatus.Completed, run.Status);
 
         var nodes = h.ReloadRunNodes().OrderBy(n => n.StartedAt).ToList();
-        // 1 WaitingHuman + 1 Succeeded human re-entry + 1 Cmd "after"
-        Assert.Equal(3, nodes.Count);
+        // 1 WaitingHuman + 1 Succeeded human re-entry + 1 Cmd "after" + 1 Cleanup
+        Assert.Equal(4, nodes.Count);
         Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[1].Status);
         Assert.Equal("after-output", nodes[2].Output);
     }
