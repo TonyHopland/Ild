@@ -187,6 +187,42 @@ public class AdapterUsageParserTests
         Assert.Equal("a, b", usage.Model);
     }
 
+    [Theory]
+    [InlineData("registered-background-command")]
+    [InlineData("registered-background-command-stdin-open")]
+    [InlineData("registered-command-and-unregistered-leftover")]
+    public void Claude_model_usage_of_a_real_two_turn_launch_equals_the_sum_of_its_turns_usage(string fixture)
+    {
+        // Captured with Claude Code 2.1.326 (Fixtures/claude-streams/README.md): the last result's modelUsage is the
+        // launch's running total, so it matches the per-turn usage objects summed when no sub-agent ran.
+        var stdout = ReadFixtureStdout(fixture);
+        var withoutModelUsage = stdout.Replace("\"modelUsage\":", "\"unread\":", StringComparison.Ordinal);
+
+        var fromModelUsage = AdapterUsageParser.ParseClaude(stdout, 0m)!;
+        var fromUsageSum = AdapterUsageParser.ParseClaude(withoutModelUsage, 0m)!;
+
+        Assert.Equal(2, fromModelUsage.Turns);
+        Assert.Equal("claude-haiku-5-5", fromModelUsage.Model);
+        Assert.Null(fromUsageSum.Model);
+        Assert.Equal(fromUsageSum.InputTokens, fromModelUsage.InputTokens);
+        Assert.Equal(fromUsageSum.OutputTokens, fromModelUsage.OutputTokens);
+        Assert.Equal(fromUsageSum.CacheReadTokens, fromModelUsage.CacheReadTokens);
+        Assert.Equal(fromUsageSum.CacheWriteTokens, fromModelUsage.CacheWriteTokens);
+    }
+
+    [Fact]
+    public void Claude_model_usage_of_a_real_sub_agent_launch_counts_the_sub_agents_tokens_the_usage_sum_misses()
+    {
+        var stdout = ReadFixtureStdout("background-subagent");
+        var withoutModelUsage = stdout.Replace("\"modelUsage\":", "\"unread\":", StringComparison.Ordinal);
+
+        var withSubAgent = AdapterUsageParser.ParseClaude(stdout, 0m)!;
+        var mainAgentOnly = AdapterUsageParser.ParseClaude(withoutModelUsage, 0m)!;
+
+        Assert.True(withSubAgent.OutputTokens > mainAgentOnly.OutputTokens);
+        Assert.True(withSubAgent.InputTokens > mainAgentOnly.InputTokens);
+    }
+
     private static string ReadFixtureStdout(string name)
         => RepositoryFiles.ReadAllText(Path.Combine("ILD.Tests", "Fixtures", "claude-streams", name + ".jsonl"));
     [Fact]

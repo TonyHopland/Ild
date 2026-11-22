@@ -27,6 +27,11 @@ public sealed record LoopRunNodeResponse(
     long? InputTokens,
     long? OutputTokens,
     decimal? CostUsd,
+    // Cache parts of InputTokens, turns the visit took and the model id(s), when the CLI reported them.
+    long? CacheReadTokens,
+    long? CacheWriteTokens,
+    int? Turns,
+    string? Model,
     // The edge the engine traversed to reach this node, so the run timeline can
     // label the routing by the edge's name (e.g. "Respond") rather than guessing
     // from node status. Null for the run's first node.
@@ -35,12 +40,7 @@ public sealed record LoopRunNodeResponse(
     // and why not when it is not. Only filled in on the run-detail endpoint, for a
     // failed or interrupted AI attempt.
     bool CanResume = false,
-    string? ResumeUnavailableReason = null,
-    // Cache parts of InputTokens, turns the visit took and the model id(s), when the CLI reported them.
-    long? CacheReadTokens = null,
-    long? CacheWriteTokens = null,
-    int? Turns = null,
-    string? Model = null)
+    string? ResumeUnavailableReason = null)
 {
     public static LoopRunNodeResponse From(LoopRunNode rn) => new(
         rn.Id,
@@ -57,9 +57,9 @@ public sealed record LoopRunNodeResponse(
         rn.InputTokens,
         rn.OutputTokens,
         rn.CostUsd,
-        rn.IncomingEdgeId,
-        CacheReadTokens: rn.CacheReadTokens,
-        CacheWriteTokens: rn.CacheWriteTokens,
-        Turns: rn.Turns,
-        Model: rn.Model);
+        rn.CacheReadTokens,
+        rn.CacheWriteTokens,
+        rn.Turns,
+        rn.Model,
+        rn.IncomingEdgeId);
 }

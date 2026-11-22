@@ -185,7 +185,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             visits.Count(v => v.Status == LoopRunNodeStatus.Failed),
             timed.Count == 0 ? null : timed.Average(),
             visits.Sum(v => v.Turns ?? 0),
-            visits.Select(v => v.Model).Where(m => !string.IsNullOrEmpty(m)).Select(m => m!).Distinct().Order(StringComparer.Ordinal).ToList());
+            visits.SelectMany(v => (v.Model ?? "").Split(", ", StringSplitOptions.RemoveEmptyEntries)).Distinct().Order(StringComparer.Ordinal).ToList());
     }
 
     /// <summary>

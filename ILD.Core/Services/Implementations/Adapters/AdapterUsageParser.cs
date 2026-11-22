@@ -22,18 +22,27 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public static class AdapterUsageParser
 {
     /// <summary>
-    /// The usage of one <c>claude --output-format stream-json</c> launch, read from its
-    /// <c>result</c> events: one per turn, since the CLI waits for background work and gives the agent
-    /// another turn. Each <c>result</c>'s <c>usage</c> is of its own turn and leaves out sub-agents, so the tokens come from the last
-    /// <c>modelUsage</c> instead, which is the launch's and covers sub-agents (summed over its model ids, which
-    /// are the model); without one, or when its cost shows it spans the session's earlier launches, from the sum of the
-    /// <c>usage</c> objects. Every <c>result</c> is a turn. <c>total_cost_usd</c>
-    /// is a running total, so the last <c>result</c> holds the whole launch's. It is also
-    /// the session's running total: on <c>--resume</c> Claude restores the cost it
-    /// recorded in the transcript (see <see cref="ParseClaudeSessionCostBefore"/>) and
-    /// counts on from it, so what the run cost is that total minus
-    /// <paramref name="sessionCostBefore"/>. When the total is below the earlier one
-    /// Claude did not count on from it, so the tokens are kept and the cost is unknown.
+    /// The usage of one <c>claude --output-format stream-json</c> launch, read from its <c>result</c>
+    /// events. There is one per turn, since the CLI waits for background work and gives the agent
+    /// another turn, so the number of results is the number of turns.
+    /// <para>
+    /// Tokens come from the last <c>modelUsage</c>: it is cumulative over the launch (each result's
+    /// figures include the earlier turns') and covers sub-agents, which each result's <c>usage</c>
+    /// leaves out. It is summed over its model ids, which are also the model. This was confirmed on
+    /// the real streams in <c>Fixtures/claude-streams</c> (see its README): the last <c>modelUsage</c>
+    /// equals the sum of the per-turn <c>usage</c> objects, plus the sub-agent's tokens in
+    /// <c>background-subagent</c>. No capture of a resumed launch exists, so <see cref="SpansEarlierLaunches"/>
+    /// guards against <c>modelUsage</c> carrying the session's earlier launches.
+    /// Without a usable <c>modelUsage</c>, the tokens are the sum of the <c>usage</c> objects.
+    /// </para>
+    /// <para>
+    /// <c>total_cost_usd</c> is a running total, so the last <c>result</c> holds the whole launch's.
+    /// It is also the session's running total: on <c>--resume</c> Claude restores the cost it
+    /// recorded in the transcript (see <see cref="ParseClaudeSessionCostBefore"/>) and counts on
+    /// from it, so what the run cost is that total minus <paramref name="sessionCostBefore"/>.
+    /// When the total is below the earlier one Claude did not count on from it, so the tokens are
+    /// kept and the cost is unknown.
+    /// </para>
     /// Returns <c>null</c> when no result reported usage or a cost.
     /// </summary>
     public static TokenUsage? ParseClaude(string? rawStdout, decimal sessionCostBefore)
@@ -66,8 +75,7 @@ public static class AdapterUsageParser
         // modelUsage counts the whole launch and the sub-agents the main agent ran, which `usage` leaves
         // out. It is used unless its cost shows it carries the session's earlier launches too.
         string? model = null;
-        if (models is { } m && m.Input + m.Output + m.CacheRead + m.CacheWrite > 0 && !(launchCost is { } spent && sessionCostBefore > 0
-                                 && m.CostUsd - spent > Math.Max(0.001m, spent * 0.01m)))
+        if (models is { } m && m.Input + m.Output + m.CacheRead + m.CacheWrite > 0 && !SpansEarlierLaunches(m.CostUsd, launchCost, sessionCostBefore))
         {
             input = m.Input + m.CacheRead + m.CacheWrite;
             output = m.Output;
@@ -79,6 +87,19 @@ public static class AdapterUsageParser
         if (input == 0 && output == 0 && total is null) return null;
         return new TokenUsage(input, output, launchCost, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, Turns: turns, Model: model);
     }
+
+    /// <summary>Rounding slack, in USD and as a fraction of the launch's cost, between <c>modelUsage</c>'s cost and the launch's.</summary>
+    private const decimal ModelCostToleranceUsd = 0.001m;
+    private const decimal ModelCostToleranceFraction = 0.01m;
+
+    /// <summary>
+    /// Whether a resumed launch's <c>modelUsage</c> costs clearly more than the launch did, so it counts the
+    /// session's earlier launches too and its tokens are not this launch's. False when nothing shows it.
+    /// </summary>
+    private static bool SpansEarlierLaunches(decimal modelCostUsd, decimal? launchCost, decimal sessionCostBefore)
+        => launchCost is { } spent
+           && sessionCostBefore > 0
+           && modelCostUsd - spent > Math.Max(ModelCostToleranceUsd, spent * ModelCostToleranceFraction);
 
     private readonly record struct ModelTotals(long Input, long Output, long CacheRead, long CacheWrite, decimal CostUsd, string? Model);
 

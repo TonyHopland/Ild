@@ -36,6 +36,36 @@ public class LoopEngineTokenUsageTests
     }
 
     [Fact]
+    public async Task Persists_turns_model_and_cache_split_even_when_no_tokens_or_cost_were_reported()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("s", NodeType.Start);
+        h.AddNode("a", NodeType.AI);
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("s", "a", EdgeType.OnSuccess);
+        h.AddEdge("a", "c", EdgeType.OnSuccess);
+
+        h.Registry.Register(new ScriptedExecutor(NodeType.Start,
+            new NodeOutcome.NodeStarting("start"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "worktree=/tmp/x")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("ai"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "ai output",
+                Usage: new TokenUsage(0, 0, null, "Claude", CacheReadTokens: 0, CacheWriteTokens: 0, Turns: 3, Model: "claude-haiku-5-5"))));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("cleanup"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("s");
+        await h.RunAsync();
+
+        var aiNode = h.ReloadRunNodes().Single(rn => rn.LoopNodeId == h.NodesById["a"].Id);
+        Assert.Equal(3, aiNode.Turns);
+        Assert.Equal("claude-haiku-5-5", aiNode.Model);
+        Assert.Null(aiNode.InputTokens);
+    }
+
+    [Fact]
     public async Task Persists_copilot_provider_run_stamping_provider_with_null_tokens()
     {
         // A Copilot (subscription-auth CLI) run reports no tokens/cost, so the

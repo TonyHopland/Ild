@@ -46,10 +46,10 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
             AddEdge(db, c1.Id, ts.Id, EdgeType.Custom, "Reject");
 
             var r1 = AddRun(db, v1.Id, LoopRunStatus.Completed, At(6, 1, 10), At(6, 1, 9));
-            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m, turns: 3, model: "claude-sonnet-5-5");
+            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m, turns: 3, model: "claude-sonnet-5-5, claude-haiku-5-5");
             AddVisit(db, r1.Id, ts.Id, LoopRunNodeStatus.Failed, At(6, 1, 10).AddMinutes(2), At(6, 1, 10).AddMinutes(6), incomingEdgeId: onFailure.Id);
             // Still running: counted as an execution, but not in the average.
-            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Running, At(6, 1, 10).AddMinutes(6), null);
+            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Running, At(6, 1, 10).AddMinutes(6), null, model: "claude-sonnet-5-5");
             AddEvent(db, r1.Id, EventType.HumanFeedbackRequested, At(6, 1, 11), "Confirm?");
             AddEvent(db, r1.Id, EventType.HumanFeedbackReceived, At(6, 1, 11).AddSeconds(90), "Yes.");
 
@@ -104,7 +104,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
         Assert.Equal(new[] { coder1, tests1, coder2 }.Order(), nodes.Keys.Order());
         AssertNode(nodes[coder1], "Coder", "AI", version: 1, executions: 2, failures: 0, avgSeconds: 120);
         Assert.Equal(3, nodes[coder1].GetProperty("turns").GetInt32());
-        Assert.Equal(new[] { "claude-sonnet-5-5" }, nodes[coder1].GetProperty("models").EnumerateArray().Select(m => m.GetString()));
+        Assert.Equal(new[] { "claude-haiku-5-5", "claude-sonnet-5-5" }, nodes[coder1].GetProperty("models").EnumerateArray().Select(m => m.GetString()));
         Assert.Empty(nodes[tests1].GetProperty("models").EnumerateArray());
         AssertNode(nodes[tests1], "Tests", "Cmd", version: 1, executions: 1, failures: 1, avgSeconds: 240);
         AssertNode(nodes[coder2], "Coder", "AI", version: 2, executions: 1, failures: 1, avgSeconds: 240);

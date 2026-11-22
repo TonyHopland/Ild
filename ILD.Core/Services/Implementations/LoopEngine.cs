@@ -1576,15 +1576,16 @@ public sealed partial class LoopEngine : ILoopEngine
             // Stamp the provider even when no tokens were reported so the run
             // can still be attributed to a provider on the dashboard.
             rn.AiProvider = usage.AiProvider;
+            // The turn count and model are facts of the visit even when it reported no tokens or cost.
             rn.Model = usage.Model;
+            rn.Turns = usage.Turns;
+            rn.CacheReadTokens = usage.CacheReadTokens;
+            rn.CacheWriteTokens = usage.CacheWriteTokens;
             if (usage.HasData)
             {
                 rn.InputTokens = usage.InputTokens;
                 rn.OutputTokens = usage.OutputTokens;
                 rn.CostUsd = usage.CostUsd;
-                rn.CacheReadTokens = usage.CacheReadTokens;
-                rn.CacheWriteTokens = usage.CacheWriteTokens;
-                rn.Turns = usage.Turns;
             }
         }
         await store.UpdateRunNodeAsync(rn);
