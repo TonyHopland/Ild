@@ -184,6 +184,8 @@ public sealed class RoutingRunHost(IRunHost local, ExecRunHost isolated) : IRunH
 
     public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default) => For(path).EntryExistsAsync(path, ct);
 
+    public Task<string?> ResolveLinksAsync(string path, CancellationToken ct = default) => For(path).ResolveLinksAsync(path, ct);
+
     // -- Preview and gateway -----------------------------------------------------
 
     // Work out a path or an address and start nothing; a preview command carries RunIn and is refused above.

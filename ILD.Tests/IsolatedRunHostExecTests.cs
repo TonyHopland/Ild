@@ -106,6 +106,20 @@ public sealed class IsolatedRunHostExecTests : IDisposable
     }
 
     [Fact]
+    public async Task A_path_is_resolved_to_where_the_run_says_it_leads_and_none_when_it_cannot_be()
+    {
+        var host = NewHost();
+        host.OnExec = async e =>
+        {
+            if (e.Joined.Contains("realpath")) await e.WriteStdoutAsync("/etc/passwd\n");
+            await e.ExitAsync(e.Joined.Contains("broken") ? 1 : 0);
+        };
+
+        Assert.Equal("/etc/passwd", await host.ResolveLinksAsync($"{WorkingDirectory}/out/etc/passwd", Ct));
+        Assert.Null(await host.ResolveLinksAsync($"{WorkingDirectory}/broken", Ct));
+    }
+
+    [Fact]
     public async Task Closing_the_input_of_a_command_ends_what_it_reads_to_the_end()
     {
         var host = NewHost();

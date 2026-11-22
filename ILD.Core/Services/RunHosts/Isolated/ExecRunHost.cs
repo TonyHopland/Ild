@@ -1423,6 +1423,14 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
         => (await RunScriptAsync(OwnerFor(path), "[ -f \"$1\" ] && [ ! -L \"$1\" ]", [path], ct)).Success;
 
+    // -m carries segments that are not there through as written, as LocalWorktrees.ResolveLinks does.
+    public async Task<string?> ResolveLinksAsync(string path, CancellationToken ct = default)
+    {
+        var result = await RunScriptAsync(OwnerFor(path), "realpath -m -- \"$1\"", [path], ct);
+        var resolved = result.StdOut.Trim();
+        return result.Success && resolved.StartsWith('/') ? resolved : null;
+    }
+
     public async Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
         => (await RunScriptAsync(OwnerFor(path), "[ -d \"$1\" ]", [path], ct)).Success;
 

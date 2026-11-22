@@ -173,6 +173,12 @@ public interface IRunFiles
 
     /// <summary>Whether anything, a link included, is at <paramref name="path"/>.</summary>
     Task<bool> EntryExistsAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// <paramref name="path"/> with every link on it followed, on the machine that holds it, so a boundary check sees where it leads.
+    /// Segments that are not there are carried through as written. Null when it cannot be resolved, such as a chain of links past what the kernel follows.
+    /// </summary>
+    Task<string?> ResolveLinksAsync(string path, CancellationToken ct = default);
 }
 
 /// <summary>Where a chat works: its folder, its toolchains, and whether a run's files are in reach of it.</summary>
