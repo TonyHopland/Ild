@@ -103,8 +103,8 @@ public class AgentIsolationSpawnSiteTests
     [InlineData("if (!Directory.Exists(run.WorktreePath)) return;", true)]
     [InlineData("var text = File.ReadAllText(Path.Combine(worktreePath, \"a\"));", true)]
     [InlineData("Directory.Exists(logDirectory);", false)]
-    [InlineData("var full = ResolveSafePath(worktreePath, p); var b = await File.ReadAllBytesAsync(full);", true)]
-    [InlineData("var full = ResolveSafePath(worktreePath, p); return new FileStream(full, FileMode.Open);", true)]
+    [InlineData("var full = ResolveSafePathAsync(worktreePath, p); var b = await File.ReadAllBytesAsync(full);", true)]
+    [InlineData("var full = ResolveSafePathAsync(worktreePath, p); return new FileStream(full, FileMode.Open);", true)]
     [InlineData("var full = Path.Combine(logDirectory, p); var b = await File.ReadAllBytesAsync(full);", false)]
     [InlineData("await host.DirectoryExistsAsync(worktreePath, ct);", false)]
     public void The_scan_tells_a_worktree_read_from_another_file_check(string statement, bool read)

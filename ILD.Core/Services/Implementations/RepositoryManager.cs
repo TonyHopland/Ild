@@ -623,8 +623,7 @@ public class RepositoryManager : IRepositoryManager
     public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null, WorktreeDiffRange? range = null)
     {
         RequireCommitShas(range);
-        var full = ResolveSafePath(worktreePath, relativePath);
-        if (full == null) return null;
+        if (await ResolveSafePathAsync(worktreePath, relativePath) is not (_, string full)) return null;
 
         var bytes = await ReadOrExplainAsync(relativePath, () => ReadFileBytesAsync(full));
 
@@ -702,10 +701,8 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<CappedFileRead?> ReadWorktreeFileCappedAsync(string worktreePath, string relativePath, int maxBytes)
     {
-        var full = ResolveSafePath(worktreePath, relativePath);
-        if (full == null) return null;
+        if (await ResolveSafePathAsync(worktreePath, relativePath) is not (string root, string full)) return null;
 
-        var root = LocalWorktrees.ResolveLinks(Path.GetFullPath(worktreePath))!;
         var firstSegment = Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar)[0];
         if (firstSegment.Equals(".git", StringComparison.OrdinalIgnoreCase)) return null;
 
@@ -740,8 +737,7 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<Stream?> OpenWorktreeFileAsync(string worktreePath, string relativePath)
     {
-        var full = ResolveSafePath(worktreePath, relativePath);
-        if (full == null) return null;
+        if (await ResolveSafePathAsync(worktreePath, relativePath) is not (_, string full)) return null;
 
         return await ReadOrExplainAsync(relativePath, () => _host.OpenFileForReadAsync(full));
     }
@@ -755,8 +751,7 @@ public class RepositoryManager : IRepositoryManager
         // A path that leads out of the worktree names nothing in it, which is
         // the same answer as one that is simply not there — and the same one the
         // read side gives, so neither endpoint tells a caller which it was.
-        var full = ResolveSafePath(worktreePath, relativePath);
-        if (full == null)
+        if (await ResolveSafePathAsync(worktreePath, relativePath) is not (_, string full))
             return WorktreeFileWriteResult.NotFound;
 
         try
@@ -993,15 +988,18 @@ public class RepositoryManager : IRepositoryManager
     /// answers where a path was spelled, not where it leads, so a link planted
     /// in the worktree pointing out of it would otherwise be a way through —
     /// one the write side would follow, carrying the user's text with it.
+    /// Links are followed on the host that holds the worktree, in one call for
+    /// both paths: for a container or pod run the path does not exist on ILD's
+    /// own disk. The root returned is the worktree's own, links followed, for
+    /// the caller that must tell which top-level entry the path is under (the
+    /// <c>.git</c> check in <see cref="ReadWorktreeFileCappedAsync"/>).
     /// </summary>
-    private static string? ResolveSafePath(string worktreePath, string relativePath)
+    private async Task<(string Root, string Full)?> ResolveSafePathAsync(string worktreePath, string relativePath)
     {
-        var root = LocalWorktrees.ResolveLinks(Path.GetFullPath(worktreePath));
-        if (root == null) return null;
-        var full = LocalWorktrees.ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
-        if (full == null) return null;
+        var resolved = await _host.ResolveLinksAsync([Path.GetFullPath(worktreePath), Path.GetFullPath(Path.Combine(worktreePath, relativePath))]);
+        if (resolved[0] is not { } root || resolved[1] is not { } full) return null;
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
-        return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
+        return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? (root, full) : null;
     }
 
     /// <summary>

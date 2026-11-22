@@ -351,6 +351,9 @@ public sealed class LocalRunHost : IRunHost, IRunHostOperator, ILocalTerminalCom
     public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
         => Task.FromResult(AgentWritableFiles.EntryExists(path));
 
+    public Task<IReadOnlyList<string?>> ResolveLinksAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string?>>(paths.Select(LocalWorktrees.ResolveLinks).ToList());
+
     // -- Preview and gateway -----------------------------------------------------
 
     public Task<Uri> PreviewTargetAsync(string workingDirectory, int port, CancellationToken ct = default)

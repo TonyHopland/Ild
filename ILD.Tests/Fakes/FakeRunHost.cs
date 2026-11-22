@@ -260,6 +260,37 @@ internal sealed class FakeRunHost : IRunHost
                 .Select(d => d[prefix.Length..]).ToList());
     }
 
+    /// <summary>Directory links planted on this host, link path to target; a path with none on it resolves to itself.</summary>
+    public Dictionary<string, string> Links { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>How many times links were resolved, each call for however many paths.</summary>
+    public int ResolveLinksCalls { get; private set; }
+
+    public Task<IReadOnlyList<string?>> ResolveLinksAsync(IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            ResolveLinksCalls++;
+            return Task.FromResult<IReadOnlyList<string?>>(paths.Select(ResolveLinks).ToList());
+        }
+    }
+
+    private string? ResolveLinks(string path)
+    {
+        var resolved = "/";
+        var hops = 0;
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            resolved = resolved == "/" ? "/" + segment : resolved + "/" + segment;
+            while (Links.TryGetValue(resolved, out var target))
+            {
+                if (++hops > 40) return null;
+                resolved = target;
+            }
+        }
+        return resolved;
+    }
+
     public Task<bool> EntryExistsAsync(string path, CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_directories.Contains(path) || _files.ContainsKey(path) || (_seesDisk && (File.Exists(path) || Directory.Exists(path))));
@@ -298,10 +329,13 @@ internal sealed class FakeRunHost : IRunHost
     public string? RunHomeFor(string workingDirectory) => null;
 
     public Task<bool> IsRunCloneAsync(string path, CancellationToken ct = default)
-        => Task.FromResult(ILD.Core.Services.RunHosts.Local.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
+        => Task.FromResult(TrustsClones || ILD.Core.Services.RunHosts.Local.LocalWorktrees.TrustedRepositoryRoot(path) is not null);
+
+    /// <summary>Whether every path counts as a clone of ours and every tool run succeeds with no output, for a worktree that exists only on this host.</summary>
+    public bool TrustsClones { get; set; }
 
     public Task<RunHostOutput> RunToolAsync(string runPath, string fileName, IReadOnlyList<string> arguments, RunToolStreams? streams = null, CancellationToken ct = default)
-        => throw new NotSupportedException("the fake host runs no tools");
+        => TrustsClones ? Task.FromResult(new RunHostOutput(0, "", "")) : throw new NotSupportedException("the fake host runs no tools");
 
     public string GatewayApiUrl(string? configuredApiUrl, string? workingDirectory) => configuredApiUrl ?? "http://fake-ild";
 

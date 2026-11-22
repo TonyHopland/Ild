@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Files;
+using ILD.Core.Services.RunHosts;
 using ILD.Core.Services.RunHosts.Local;
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
@@ -1397,5 +1398,62 @@ public sealed class RepositoryManagerTests : IDisposable
         p.WaitForExit();
         if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)}: {p.StandardError.ReadToEnd()}");
         return stdout.Trim();
+    }
+
+    private static (RepositoryManager Mgr, FakeRunHost Host) ContainerRun(string root)
+    {
+        // The worktree exists only on the run's host, so nothing of it can be followed on ILD's own disk.
+        var host = new FakeRunHost { Kind = RunHostKind.Container, TrustsClones = true }
+            .WithDirectory(root)
+            .WithFile("/etc/passwd", "root:x:0:0\n")
+            .WithFile(root + "/inside/a.txt", "inside\n");
+        host.Links[root + "/out"] = "/";
+        host.Links[root + "/shortcut"] = root + "/inside";
+        return (new RepositoryManager(new AuditingRunner(), host), host);
+    }
+
+    [Fact]
+    public async Task A_link_out_of_a_container_worktree_is_not_a_way_through_either()
+    {
+        const string root = "/ild-run/abc/repo";
+        var (mgr, host) = ContainerRun(root);
+
+        Assert.Null(await mgr.ReadWorktreeFileAsync(root, "out/etc/passwd"));
+        Assert.Null(await mgr.OpenWorktreeFileAsync(root, "out/etc/passwd"));
+        Assert.Null(await mgr.ReadWorktreeFileCappedAsync(root, "out/etc/passwd", 1024));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, root, "out/etc/passwd"));
+        Assert.Equal("root:x:0:0\n", System.Text.Encoding.UTF8.GetString(await ReadAllAsync(host, "/etc/passwd")));
+    }
+
+    [Fact]
+    public async Task A_worktree_file_operation_asks_the_host_to_resolve_links_once()
+    {
+        const string root = "/ild-run/abc/repo";
+        var (mgr, host) = ContainerRun(root);
+
+        await mgr.ReadWorktreeFileCappedAsync(root, "shortcut/a.txt", 1024);
+        Assert.Equal(1, host.ResolveLinksCalls);
+
+        await mgr.OpenWorktreeFileAsync(root, "inside/a.txt");
+        Assert.Equal(2, host.ResolveLinksCalls);
+    }
+
+    [Fact]
+    public async Task A_link_that_stays_inside_a_container_worktree_is_followed()
+    {
+        const string root = "/ild-run/abc/repo";
+        var (mgr, _) = ContainerRun(root);
+
+        var read = await mgr.ReadWorktreeFileCappedAsync(root, "shortcut/a.txt", 1024);
+
+        Assert.Equal("inside\n", read?.Text);
+    }
+
+    private static async Task<byte[]> ReadAllAsync(FakeRunHost host, string path)
+    {
+        await using var stream = (await host.OpenFileForReadAsync(path))!;
+        using var bytes = new MemoryStream();
+        await stream.CopyToAsync(bytes);
+        return bytes.ToArray();
     }
 }
