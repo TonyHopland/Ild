@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ILD.Data;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations.Adapters;
@@ -22,38 +23,105 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public static class AdapterUsageParser
 {
     /// <summary>
-    /// The usage of one <c>claude --output-format stream-json</c> launch, read from its
-    /// <c>result</c> events: one per turn, since the CLI waits for background work and gives the agent
-    /// another turn. Each <c>result</c> carries the tokens of its own turn, so the launch used their sum; <c>total_cost_usd</c>
-    /// is a running total, so the last <c>result</c> holds the whole launch's. It is also
-    /// the session's running total: on <c>--resume</c> Claude restores the cost it
-    /// recorded in the transcript (see <see cref="ParseClaudeSessionCostBefore"/>) and
-    /// counts on from it, so what the run cost is that total minus
-    /// <paramref name="sessionCostBefore"/>. When the total is below the earlier one
-    /// Claude did not count on from it, so the tokens are kept and the cost is unknown.
+    /// The usage of one <c>claude --output-format stream-json</c> launch, read from its <c>result</c>
+    /// events. There is one per turn, since the CLI waits for background work and gives the agent
+    /// another turn, so the number of results is the number of turns.
+    /// <para>
+    /// Tokens come from the last <c>modelUsage</c>: it is cumulative over the launch (each result's
+    /// figures include the earlier turns') and covers sub-agents, which each result's <c>usage</c>
+    /// leaves out. It is summed over its model ids, which are also the model. This was confirmed on
+    /// the real streams in <c>Fixtures/claude-streams</c> (see its README): the last <c>modelUsage</c>
+    /// equals the sum of the per-turn <c>usage</c> objects, plus the sub-agent's tokens in
+    /// <c>background-subagent</c>. No capture of a resumed launch exists, so <see cref="SpansEarlierLaunches"/>
+    /// guards against <c>modelUsage</c> carrying the session's earlier launches.
+    /// Without a usable <c>modelUsage</c>, the tokens are the sum of the <c>usage</c> objects.
+    /// </para>
+    /// <para>
+    /// <c>total_cost_usd</c> is a running total, so the last <c>result</c> holds the whole launch's.
+    /// It is also the session's running total: on <c>--resume</c> Claude restores the cost it
+    /// recorded in the transcript (see <see cref="ParseClaudeSessionCostBefore"/>) and counts on
+    /// from it, so what the run cost is that total minus <paramref name="sessionCostBefore"/>.
+    /// When the total is below the earlier one Claude did not count on from it, so the tokens are
+    /// kept and the cost is unknown.
+    /// </para>
     /// Returns <c>null</c> when no result reported usage or a cost.
     /// </summary>
     public static TokenUsage? ParseClaude(string? rawStdout, decimal sessionCostBefore)
     {
-        long input = 0, output = 0;
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+        int turns = 0;
         decimal? total = null;
+        ModelTotals? models = null;
         ForEachJsonObject(rawStdout, root =>
         {
             if (StringProperty(root, "type") != "result") return;
 
+            turns++;
             if (ObjectProperty(root, "usage") is { } usage)
             {
-                var resultInput = SumLongs(usage, "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens");
-                var resultOutput = SumLongs(usage, "output_tokens");
-                input += resultInput;
-                output += resultOutput;
+                input += SumLongs(usage, "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens");
+                output += SumLongs(usage, "output_tokens");
+                cacheRead += SumLongs(usage, "cache_read_input_tokens");
+                cacheWrite += SumLongs(usage, "cache_creation_input_tokens");
             }
+            if (ObjectProperty(root, "modelUsage") is { } modelUsage && ReadModelTotals(modelUsage) is { } read)
+                models = read;
             if (root.TryGetProperty("total_cost_usd", out var cost) && TryGetDecimal(cost, out var resultTotal))
                 total = resultTotal;
         });
 
+        if (turns == 0) return null;
+        var launchCost = total >= sessionCostBefore ? total - sessionCostBefore : null;
+
+        // modelUsage counts the whole launch and the sub-agents the main agent ran, which `usage` leaves
+        // out. It is used unless its cost shows it carries the session's earlier launches too.
+        string? model = null;
+        if (models is { } m && m.Input + m.Output + m.CacheRead + m.CacheWrite > 0 && !SpansEarlierLaunches(m.CostUsd, launchCost, sessionCostBefore))
+        {
+            input = m.Input + m.CacheRead + m.CacheWrite;
+            output = m.Output;
+            cacheRead = m.CacheRead;
+            cacheWrite = m.CacheWrite;
+            model = m.Model;
+        }
+
         if (input == 0 && output == 0 && total is null) return null;
-        return new TokenUsage(input, output, total >= sessionCostBefore ? total - sessionCostBefore : null);
+        return new TokenUsage(input, output, launchCost, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, Turns: turns, Model: model);
+    }
+
+    /// <summary>Rounding slack, in USD and as a fraction of the launch's cost, between <c>modelUsage</c>'s cost and the launch's.</summary>
+    private const decimal ModelCostToleranceUsd = 0.001m;
+    private const decimal ModelCostToleranceFraction = 0.01m;
+
+    /// <summary>
+    /// Whether a resumed launch's <c>modelUsage</c> costs clearly more than the launch did, so it counts the
+    /// session's earlier launches too and its tokens are not this launch's. False when nothing shows it.
+    /// </summary>
+    private static bool SpansEarlierLaunches(decimal modelCostUsd, decimal? launchCost, decimal sessionCostBefore)
+        => launchCost is { } spent
+           && sessionCostBefore > 0
+           && modelCostUsd - spent > Math.Max(ModelCostToleranceUsd, spent * ModelCostToleranceFraction);
+
+    private readonly record struct ModelTotals(long Input, long Output, long CacheRead, long CacheWrite, decimal CostUsd, string? Model);
+
+    /// <summary>The <c>modelUsage</c> of a Claude <c>result</c>, summed over its model ids; null when it names none.</summary>
+    private static ModelTotals? ReadModelTotals(JsonElement modelUsage)
+    {
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+        var cost = 0m;
+        var names = new List<string>();
+        foreach (var entry in modelUsage.EnumerateObject())
+        {
+            if (entry.Value.ValueKind != JsonValueKind.Object) continue;
+            names.Add(entry.Name);
+            input += SumLongs(entry.Value, "inputTokens");
+            output += SumLongs(entry.Value, "outputTokens");
+            cacheRead += SumLongs(entry.Value, "cacheReadInputTokens");
+            cacheWrite += SumLongs(entry.Value, "cacheCreationInputTokens");
+            if (entry.Value.TryGetProperty("costUSD", out var c) && TryGetDecimal(c, out var modelCost))
+                cost += modelCost;
+        }
+        return names.Count == 0 ? null : new ModelTotals(input, output, cacheRead, cacheWrite, cost, ModelIds.Join(names));
     }
 
     /// <summary>
@@ -86,7 +154,7 @@ public static class AdapterUsageParser
     /// </summary>
     public static TokenUsage? ParseOpenCode(string? rawStdout)
     {
-        long input = 0, output = 0;
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
         decimal? cost = null;
         ForEachJsonObject(rawStdout, root =>
         {
@@ -98,15 +166,19 @@ public static class AdapterUsageParser
             {
                 input += SumLongs(tokens, "input");
                 if (ObjectProperty(tokens, "cache") is { } cache)
-                    input += SumLongs(cache, "read", "write");
+                {
+                    cacheRead += SumLongs(cache, "read");
+                    cacheWrite += SumLongs(cache, "write");
+                }
                 output += SumLongs(tokens, "output");
             }
             if (part.TryGetProperty("cost", out var stepCost) && TryGetDecimal(stepCost, out var callCost))
                 cost = (cost ?? 0m) + callCost;
         });
 
+        input += cacheRead + cacheWrite;
         if (input == 0 && output == 0 && cost is null) return null;
-        return new TokenUsage(input, output, cost);
+        return new TokenUsage(input, output, cost, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite);
     }
 
     /// <summary>
@@ -119,7 +191,7 @@ public static class AdapterUsageParser
     /// </summary>
     public static TokenUsage? ParsePi(string? rawStdout)
     {
-        long input = 0, output = 0;
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
         decimal cost = 0m;
         ForEachJsonObject(rawStdout, root =>
         {
@@ -127,6 +199,8 @@ public static class AdapterUsageParser
                 return;
 
             input += SumLongs(usage, "input", "cacheRead", "cacheWrite");
+            cacheRead += SumLongs(usage, "cacheRead");
+            cacheWrite += SumLongs(usage, "cacheWrite");
             output += SumLongs(usage, "output");
             if (usage.TryGetProperty("cost", out var costObject) && costObject.ValueKind == JsonValueKind.Object
                 && costObject.TryGetProperty("total", out var total) && TryGetDecimal(total, out var callCost))
@@ -134,7 +208,7 @@ public static class AdapterUsageParser
         });
 
         if (input == 0 && output == 0) return null;
-        return new TokenUsage(input, output, cost > 0 ? cost : null);
+        return new TokenUsage(input, output, cost > 0 ? cost : null, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite);
     }
 
     /// <summary>

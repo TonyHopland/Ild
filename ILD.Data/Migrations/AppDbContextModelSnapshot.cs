@@ -1229,6 +1229,12 @@ namespace ILD.Data.Migrations
                     b.Property<string>("AiSessionId")
                         .HasColumnType("text");
 
+                    b.Property<long?>("CacheReadTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("CacheWriteTokens")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1257,6 +1263,9 @@ namespace ILD.Data.Migrations
                     b.Property<Guid>("LoopRunId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Model")
+                        .HasColumnType("text");
+
                     b.Property<string>("NodeLabel")
                         .HasColumnType("text");
 
@@ -1273,6 +1282,9 @@ namespace ILD.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("Turns")
                         .HasColumnType("integer");
 
                     b.HasKey("Id");

@@ -55,6 +55,16 @@ public class LoopRunNode
     // tokens/cost per provider. Null for non-AI nodes.
     public string? AiProvider { get; set; }
 
+    // Cache parts of InputTokens, the turns the visit took (a woken session has several) and the
+    // model id(s) that spent the tokens, when the CLI reports them.
+    public long? CacheReadTokens { get; set; }
+
+    public long? CacheWriteTokens { get; set; }
+
+    public int? Turns { get; set; }
+
+    public string? Model { get; set; }
+
     // The agent CLI's session id for this visit, written as soon as the adapter
     // reports it (so it survives a non-zero exit). What Resume continues from.
     public string? AiSessionId { get; set; }

@@ -1,4 +1,8 @@
+using System.ComponentModel;
+using System.Reflection;
 using System.Web;
+using ILD.McpServer.Tools;
+using ModelContextProtocol.Server;
 using ILD.Tests.Fakes;
 
 namespace ILD.Tests;
@@ -45,6 +49,18 @@ public class LoopRetroToolsTests
         var (barePath, bareQuery) = Split(await InvokeToolAsync("get_template_analytics", new Dictionary<string, object?>()));
         Assert.Equal("/api/v1/agent/analytics/templates", barePath);
         Assert.All(bareQuery.Values, Assert.Null);
+    }
+
+    [Theory]
+    [InlineData("get_loop_run", new[] { "cacheReadTokens", "turns", "model id" })]
+    [InlineData("get_template_analytics", new[] { "turns", "model ids" })]
+    public void The_retro_tools_describe_the_turn_and_model_figures_they_return(string tool, string[] mentions)
+    {
+        var method = typeof(ListingTools).GetMethods()
+            .Single(m => m.GetCustomAttribute<McpServerToolAttribute>()?.Name == tool);
+        var description = method.GetCustomAttribute<DescriptionAttribute>()!.Description;
+
+        Assert.All(mentions, m => Assert.Contains(m, description));
     }
 
     [Fact]
