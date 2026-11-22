@@ -72,6 +72,10 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
                 n.OutputTokens,
                 n.CostUsd,
                 n.AiProvider,
+                n.CacheReadTokens,
+                n.CacheWriteTokens,
+                n.Turns,
+                n.Model,
                 n.PreviousNodeId,
                 n.IncomingEdgeId,
             })
@@ -118,6 +122,7 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
                 v.StartedAt.HasValue && v.CompletedAt.HasValue ? (v.CompletedAt.Value - v.StartedAt.Value).TotalSeconds : null,
                 error, errorTruncated,
                 v.InputTokens, v.OutputTokens, v.CostUsd, v.AiProvider,
+                v.CacheReadTokens, v.CacheWriteTokens, v.Turns, v.Model,
                 incoming, taken);
         }).ToList();
 

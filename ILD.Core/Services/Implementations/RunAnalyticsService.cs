@@ -145,7 +145,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             var runIds = liveRuns.Select(r => r.RunId).ToList();
             visits = await _db.LoopRunNodes
                 .Where(n => runIds.Contains(n.LoopRunId))
-                .Select(n => new NodeVisit(n.LoopNodeId, n.Status, n.StartedAt, n.CompletedAt))
+                .Select(n => new NodeVisit(n.LoopNodeId, n.Status, n.StartedAt, n.CompletedAt, n.Turns, n.Model))
                 .ToListAsync(cancellationToken);
             var versionIds = liveRuns.Select(r => r.VersionId).Distinct().ToList();
             templateNodes = await _db.LoopNodes
@@ -183,7 +183,9 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             node.Id, node.Label, node.NodeType, node.VersionNumber,
             visits.Count,
             visits.Count(v => v.Status == LoopRunNodeStatus.Failed),
-            timed.Count == 0 ? null : timed.Average());
+            timed.Count == 0 ? null : timed.Average(),
+            visits.Sum(v => v.Turns ?? 0),
+            visits.Select(v => v.Model).Where(m => !string.IsNullOrEmpty(m)).Select(m => m!).Distinct().Order(StringComparer.Ordinal).ToList());
     }
 
     /// <summary>
@@ -385,7 +387,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     /// <summary>A still-existing run's contribution, with the run and the version it ran.</summary>
     private sealed record LiveRun(Guid RunId, Guid VersionId, RunContribution Contribution);
 
-    private sealed record NodeVisit(Guid LoopNodeId, LoopRunNodeStatus Status, DateTime? StartedAt, DateTime? CompletedAt);
+    private sealed record NodeVisit(Guid LoopNodeId, LoopRunNodeStatus Status, DateTime? StartedAt, DateTime? CompletedAt, int? Turns, string? Model);
 
     private sealed record TemplateNode(Guid Id, Guid TemplateId, string Label, NodeType NodeType, int VersionNumber);
 

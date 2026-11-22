@@ -626,6 +626,11 @@ export interface LoopRunNode {
   inputTokens?: number | null;
   outputTokens?: number | null;
   costUsd?: number | null;
+  /** Cache parts of inputTokens, turns the visit took (above 1 when woken again) and model id(s), when reported. */
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+  turns?: number | null;
+  model?: string | null;
   /** Whether Resume (continue this attempt's agent session) works; run-detail endpoint, failed or interrupted AI attempts. */
   canResume?: boolean;
   /** Why Resume is unavailable, when it is. */

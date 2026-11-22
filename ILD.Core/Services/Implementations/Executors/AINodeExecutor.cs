@@ -248,6 +248,7 @@ public sealed class AINodeExecutor : INodeExecutor
             // provider ran it — even when the CLI reported no tokens. Adapters
             // leave AiProvider null; the executor owns the provider identity.
             var usage = (result.Usage ?? new ILD.Data.DTOs.TokenUsage(0, 0, null)) with { AiProvider = provider.Name };
+            usage = usage with { Model = usage.Model ?? (string.IsNullOrWhiteSpace(provider.Model) ? null : provider.Model) };
             // Parenthesised deliberately: `??` binds looser than `&&`, so the
             // unbracketed form collapsed to `cfg.UseSession` alone and could
             // bind a null placeholder or a null session id.

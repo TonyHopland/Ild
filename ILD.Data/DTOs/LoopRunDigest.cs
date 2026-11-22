@@ -56,6 +56,10 @@ public sealed record LoopRunVisitDigest(
     long? OutputTokens,
     decimal? CostUsd,
     string? AiProvider,
+    long? CacheReadTokens,
+    long? CacheWriteTokens,
+    int? Turns,
+    string? Model,
     LoopRunIncomingEdge? IncomingEdge,
     LoopRunEdgeTaken? EdgeTaken);
 

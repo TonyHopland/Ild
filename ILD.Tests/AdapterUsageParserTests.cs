@@ -144,6 +144,51 @@ public class AdapterUsageParserTests
         Assert.Equal(252, usage.OutputTokens);
     }
 
+
+    [Fact]
+    public void Claude_tokens_come_from_the_launchs_model_usage_with_sub_agents_the_turns_and_the_model()
+    {
+        var result = ReadFixtureStdout("background-subagent");
+
+        var usage = AdapterUsageParser.ParseClaude(result, 0m)!;
+
+        Assert.Equal(352, usage.OutputTokens);
+        Assert.Equal(12 + 95179 + 31357, usage.InputTokens);
+        Assert.Equal(95179, usage.CacheReadTokens);
+        Assert.Equal(31357, usage.CacheWriteTokens);
+        Assert.Equal(2, usage.Turns);
+        Assert.Equal("claude-haiku-5-5", usage.Model);
+    }
+
+    [Fact]
+    public void Claude_model_usage_that_spans_the_sessions_earlier_launches_is_not_used_on_a_resume()
+    {
+        // Total 5.00 on a session that had 3.00 before: the launch cost 2.00, but modelUsage costs 5.00, so it is session-wide.
+        var stdout = string.Join('\n',
+            "{\"type\":\"result\",\"total_cost_usd\":5.0,\"usage\":{\"input_tokens\":10,\"output_tokens\":4},\"modelUsage\":{\"m\":{\"inputTokens\":900,\"outputTokens\":400,\"costUSD\":5.0}}}");
+
+        var usage = AdapterUsageParser.ParseClaude(stdout, 3m)!;
+
+        Assert.Equal(10, usage.InputTokens);
+        Assert.Equal(4, usage.OutputTokens);
+        Assert.Equal(2.0m, usage.CostUsd);
+        Assert.Equal(1, usage.Turns);
+        Assert.Null(usage.Model);
+    }
+
+    [Fact]
+    public void Claude_model_usage_of_a_resumed_launch_is_used_when_its_cost_matches_the_launchs()
+    {
+        var stdout = "{\"type\":\"result\",\"total_cost_usd\":5.0,\"modelUsage\":{\"a\":{\"inputTokens\":9,\"outputTokens\":4,\"costUSD\":1.5},\"b\":{\"outputTokens\":6,\"costUSD\":0.5}}}";
+
+        var usage = AdapterUsageParser.ParseClaude(stdout, 3m)!;
+
+        Assert.Equal(10, usage.OutputTokens);
+        Assert.Equal("a, b", usage.Model);
+    }
+
+    private static string ReadFixtureStdout(string name)
+        => RepositoryFiles.ReadAllText(Path.Combine("ILD.Tests", "Fixtures", "claude-streams", name + ".jsonl"));
     [Fact]
     public void Claude_cost_comes_only_from_the_results_total_never_from_a_cost_elsewhere_in_the_stream()
     {

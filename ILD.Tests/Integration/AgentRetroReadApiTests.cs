@@ -46,7 +46,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
             AddEdge(db, c1.Id, ts.Id, EdgeType.Custom, "Reject");
 
             var r1 = AddRun(db, v1.Id, LoopRunStatus.Completed, At(6, 1, 10), At(6, 1, 9));
-            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m);
+            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m, turns: 3, model: "claude-sonnet-5-5");
             AddVisit(db, r1.Id, ts.Id, LoopRunNodeStatus.Failed, At(6, 1, 10).AddMinutes(2), At(6, 1, 10).AddMinutes(6), incomingEdgeId: onFailure.Id);
             // Still running: counted as an execution, but not in the average.
             AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Running, At(6, 1, 10).AddMinutes(6), null);
@@ -58,7 +58,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
 
             // Outside the date range.
             var r3 = AddRun(db, v1.Id, LoopRunStatus.Completed, At(6, 10, 8), At(6, 10, 8));
-            AddVisit(db, r3.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 10, 8), At(6, 10, 8).AddSeconds(5), "claude", 1, 1, 0.01m);
+            AddVisit(db, r3.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 10, 8), At(6, 10, 8).AddSeconds(5), "claude", 1, 1, 0.01m, turns: 1, model: "claude-sonnet-5-5");
 
             // Never started: its day is CreatedAt's. No AI node, so provider "(none)".
             var r4 = AddRun(db, v1.Id, LoopRunStatus.Running, null, At(6, 2, 12));
@@ -103,6 +103,9 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
         var nodes = alphaRow.GetProperty("nodes").EnumerateArray().ToDictionary(n => n.GetProperty("nodeId").GetGuid());
         Assert.Equal(new[] { coder1, tests1, coder2 }.Order(), nodes.Keys.Order());
         AssertNode(nodes[coder1], "Coder", "AI", version: 1, executions: 2, failures: 0, avgSeconds: 120);
+        Assert.Equal(3, nodes[coder1].GetProperty("turns").GetInt32());
+        Assert.Equal(new[] { "claude-sonnet-5-5" }, nodes[coder1].GetProperty("models").EnumerateArray().Select(m => m.GetString()));
+        Assert.Empty(nodes[tests1].GetProperty("models").EnumerateArray());
         AssertNode(nodes[tests1], "Tests", "Cmd", version: 1, executions: 1, failures: 1, avgSeconds: 240);
         AssertNode(nodes[coder2], "Coder", "AI", version: 2, executions: 1, failures: 1, avgSeconds: 240);
 
@@ -441,7 +444,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
             var visit3 = AddVisit(db, run.Id, nPlan.Id, LoopRunNodeStatus.Failed, t0.AddSeconds(40), null,
                 incomingEdgeId: eReject.Id, created: t0.AddSeconds(40), error: longError);
             var visit1 = AddVisit(db, run.Id, nPlan.Id, LoopRunNodeStatus.Succeeded, t0, t0.AddSeconds(10),
-                "claude", 10, 20, 0.10m, created: t0, error: "short");
+                "claude", 10, 20, 0.10m, created: t0, error: "short", turns: 2, model: "claude-opus-5-5", cacheRead: 7, cacheWrite: 3);
             var visit4 = AddVisit(db, run.Id, nFix.Id, LoopRunNodeStatus.Succeeded, t0.AddSeconds(50), t0.AddSeconds(55),
                 incomingEdgeId: eToFix.Id, created: t0.AddSeconds(50));
             var visit2 = AddVisit(db, run.Id, nReview.Id, LoopRunNodeStatus.Succeeded, t0.AddSeconds(10), t0.AddSeconds(25),
@@ -510,6 +513,10 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
         Assert.Equal(20, first.GetProperty("outputTokens").GetInt64());
         Assert.Equal(0.10m, first.GetProperty("costUsd").GetDecimal());
         Assert.Equal("claude", first.GetProperty("aiProvider").GetString());
+        Assert.Equal(2, first.GetProperty("turns").GetInt32());
+        Assert.Equal("claude-opus-5-5", first.GetProperty("model").GetString());
+        Assert.Equal(7, first.GetProperty("cacheReadTokens").GetInt64());
+        Assert.Equal(3, first.GetProperty("cacheWriteTokens").GetInt64());
         Assert.True(IsNullOrMissing(first, "incomingEdge"));
         AssertEdgeTaken(first, toReview, "OnSuccess", null, review, "Review");
 
@@ -930,7 +937,8 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
     private static LoopRunNode AddVisit(
         AppDbContext db, Guid runId, Guid nodeId, LoopRunNodeStatus status, DateTime? started, DateTime? completed,
         string? aiProvider = null, long? input = null, long? output = null, decimal? cost = null,
-        Guid? incomingEdgeId = null, DateTime? created = null, string? error = null)
+        Guid? incomingEdgeId = null, DateTime? created = null, string? error = null,
+        int? turns = null, string? model = null, long? cacheRead = null, long? cacheWrite = null)
     {
         var visit = new LoopRunNode
         {
@@ -945,6 +953,10 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
             InputTokens = input,
             OutputTokens = output,
             CostUsd = cost,
+            Turns = turns,
+            Model = model,
+            CacheReadTokens = cacheRead,
+            CacheWriteTokens = cacheWrite,
             AiProvider = aiProvider,
             Error = error,
             CreatedAt = created ?? started ?? At(1, 1, 0),

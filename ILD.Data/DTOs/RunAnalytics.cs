@@ -61,6 +61,8 @@ public sealed record TemplateAnalytics(
 /// One template node's visits in the runs behind a <see cref="TemplateAnalyticsDetail"/>:
 /// how often it ran, how often a visit ended <c>Failed</c>, and the mean seconds of
 /// the visits that both started and completed (null when none did).
+/// <see cref="Turns"/> is the turns the visits took (a visit woken again by a notification or a
+/// resume has more than one; 0 when none reported it) and <see cref="Models"/> the model ids they ran.
 /// <see cref="TemplateVersion"/> is the version number the node belongs to; each
 /// version stores its own nodes, so two versions' "Coder" are two rows.
 /// </summary>
@@ -71,7 +73,9 @@ public sealed record TemplateNodeAnalytics(
     int TemplateVersion,
     int Executions,
     int Failures,
-    double? AvgSeconds);
+    double? AvgSeconds,
+    int Turns,
+    IReadOnlyList<string> Models);
 
 /// <summary>
 /// A template's dashboard row with per-node figures beside it. The figures in
