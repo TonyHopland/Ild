@@ -144,7 +144,6 @@ public class AdapterUsageParserTests
         Assert.Equal(252, usage.OutputTokens);
     }
 
-
     [Fact]
     public void Claude_tokens_come_from_the_launchs_model_usage_with_sub_agents_the_turns_and_the_model()
     {
@@ -225,6 +224,7 @@ public class AdapterUsageParserTests
 
     private static string ReadFixtureStdout(string name)
         => RepositoryFiles.ReadAllText(Path.Combine("ILD.Tests", "Fixtures", "claude-streams", name + ".jsonl"));
+
     [Fact]
     public void Claude_cost_comes_only_from_the_results_total_never_from_a_cost_elsewhere_in_the_stream()
     {
