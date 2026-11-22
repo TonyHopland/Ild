@@ -1,6 +1,7 @@
 using System.Data;
 using System.Linq.Expressions;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -185,7 +186,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             visits.Count(v => v.Status == LoopRunNodeStatus.Failed),
             timed.Count == 0 ? null : timed.Average(),
             visits.Sum(v => v.Turns ?? 0),
-            visits.SelectMany(v => (v.Model ?? "").Split(", ", StringSplitOptions.RemoveEmptyEntries)).Distinct().Order(StringComparer.Ordinal).ToList());
+            visits.SelectMany(v => ModelIds.Split(v.Model)).Distinct().Order(StringComparer.Ordinal).ToList());
     }
 
     /// <summary>

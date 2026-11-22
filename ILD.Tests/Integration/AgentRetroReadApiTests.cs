@@ -46,7 +46,7 @@ public class AgentRetroReadApiTests(SharedApiFactory factory) : IClassFixture<Sh
             AddEdge(db, c1.Id, ts.Id, EdgeType.Custom, "Reject");
 
             var r1 = AddRun(db, v1.Id, LoopRunStatus.Completed, At(6, 1, 10), At(6, 1, 9));
-            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m, turns: 3, model: "claude-sonnet-5-5, claude-haiku-5-5");
+            AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Succeeded, At(6, 1, 10), At(6, 1, 10).AddMinutes(2), "claude", 100, 40, 0.10m, turns: 3, model: ModelIds.Join(new[] { "claude-sonnet-5-5", "claude-haiku-5-5" }));
             AddVisit(db, r1.Id, ts.Id, LoopRunNodeStatus.Failed, At(6, 1, 10).AddMinutes(2), At(6, 1, 10).AddMinutes(6), incomingEdgeId: onFailure.Id);
             // Still running: counted as an execution, but not in the average.
             AddVisit(db, r1.Id, c1.Id, LoopRunNodeStatus.Running, At(6, 1, 10).AddMinutes(6), null, model: "claude-sonnet-5-5");

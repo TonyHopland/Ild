@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ILD.Data;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations.Adapters;
@@ -120,7 +121,7 @@ public static class AdapterUsageParser
             if (entry.Value.TryGetProperty("costUSD", out var c) && TryGetDecimal(c, out var modelCost))
                 cost += modelCost;
         }
-        return names.Count == 0 ? null : new ModelTotals(input, output, cacheRead, cacheWrite, cost, string.Join(", ", names));
+        return names.Count == 0 ? null : new ModelTotals(input, output, cacheRead, cacheWrite, cost, ModelIds.Join(names));
     }
 
     /// <summary>

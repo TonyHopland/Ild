@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations.Adapters;
 
 namespace ILD.Tests;
@@ -183,7 +184,7 @@ public class AdapterUsageParserTests
         var usage = AdapterUsageParser.ParseClaude(stdout, 3m)!;
 
         Assert.Equal(10, usage.OutputTokens);
-        Assert.Equal("a, b", usage.Model);
+        Assert.Equal(new[] { "a", "b" }, ModelIds.Split(usage.Model));
     }
 
     [Theory]
