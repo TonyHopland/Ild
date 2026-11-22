@@ -1423,12 +1423,36 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
     public async Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
         => (await RunScriptAsync(OwnerFor(path), "[ -f \"$1\" ] && [ ! -L \"$1\" ]", [path], ct)).Success;
 
-    // -m carries segments that are not there through as written, as LocalWorktrees.ResolveLinks does.
+    /// <summary>
+    /// Prints <c>$1</c> with every link followed and segments that are not there carried through as written, as
+    /// <c>LocalWorktrees.ResolveLinks</c> does. GNU <c>realpath -m</c> and <c>readlink -m</c> do it directly; an image with
+    /// neither (BusyBox has no <c>-m</c>) gets the deepest existing ancestor resolved with <c>cd -P</c>. That fallback refuses
+    /// a link as the last existing component rather than guess where it leads.
+    /// </summary>
+    internal const string ResolveLinksScript = """
+        realpath -m -- "$1" 2>/dev/null && exit 0
+        readlink -m -- "$1" 2>/dev/null && exit 0
+        p=$1; rest=
+        while [ ! -e "$p" ] && [ ! -L "$p" ] && [ "$p" != / ]; do
+          rest="/${p##*/}$rest"; p=${p%/*}; [ -n "$p" ] || p=/
+        done
+        [ ! -L "$p" ] || exit 1
+        if [ -d "$p" ]; then dir=$p; base=; else dir=${p%/*}; base=/${p##*/}; fi
+        [ -n "$dir" ] || dir=/
+        resolved=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || exit 1
+        [ "$resolved" = / ] && resolved=
+        out=$resolved$base$rest; printf '%s\n' "${out:-/}"
+        """;
+
     public async Task<string?> ResolveLinksAsync(string path, CancellationToken ct = default)
     {
-        var result = await RunScriptAsync(OwnerFor(path), "realpath -m -- \"$1\"", [path], ct);
+        var owner = OwnerFor(path);
+        var result = await RunScriptAsync(owner, ResolveLinksScript, [path], ct);
         var resolved = result.StdOut.Trim();
-        return result.Success && resolved.StartsWith('/') ? resolved : null;
+        if (result.Success && resolved.StartsWith('/')) return resolved;
+        // Null reads as "leads out of the worktree" to the caller, so say why it is null.
+        Logger?.LogWarning("Could not resolve the links on {Path} in the {Noun} of {Owner}: exit {ExitCode}: {Error}", path, Noun, owner.Id, result.ExitCode, result.StdErr.Trim());
+        return null;
     }
 
     public async Task<bool> DirectoryExistsAsync(string path, CancellationToken ct = default)
