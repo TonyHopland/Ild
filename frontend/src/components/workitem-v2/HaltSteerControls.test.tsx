@@ -544,28 +544,3 @@ describe("HaltSteerControls after a node failed", () => {
     expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
   });
 });
-
-describe("HaltSteerControls on a dead end", () => {
-  test("offers cleanup to Backlog and no retry or resume", () => {
-    render(
-      <HaltSteerControls
-        run={run({
-          status: LoopRunStatus.WaitingHuman,
-          isHalted: false,
-          humanFeedbackReason: "Dead End",
-          nodes: [node({ status: LoopRunNodeStatus.Succeeded })],
-        })}
-        workItemStatus={WorkItemStatus.HumanFeedback}
-        onRetryFailed={vi.fn()}
-        onResumeFailed={vi.fn()}
-        onCleanupBacklog={vi.fn()}
-      />,
-      { wrapper: MemoryRouter },
-    );
-
-    expect(screen.getByText(/Dead end — the template has nowhere to go next/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Abandon run" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Resume node" })).toBeNull();
-  });
-});

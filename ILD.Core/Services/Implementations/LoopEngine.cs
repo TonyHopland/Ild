@@ -1224,8 +1224,10 @@ public sealed partial class LoopEngine : ILoopEngine
                                 return ParkResult.Stop;
                             }
                             // Only a Cleanup node ends a run. Any other node whose
-                            // result has no edge is a dead end in the template.
-                            await ParkOnDeadEndAsync(run, loopRunStore, sp, node, runNodeId, ok.Edge);
+                            // result has no edge is a dead end in the template: park
+                            // on it, with the unmatched result as the reason.
+                            await ParkOnFailedNodeAsync(run, $"Dead end: \"{node.Label}\" finished with {ok.Edge}, which has no outgoing edge",
+                                loopRunStore, sp, node, runNodeId);
                             return ParkResult.Stop;
                         }
                         run.CurrentNodeId = successEdge.TargetNodeId;
@@ -1759,21 +1761,6 @@ public sealed partial class LoopEngine : ILoopEngine
         if (!IsAlive(run.Status)) return;
         await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, humanFeedbackReason,
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
-    }
-
-    /// <summary>
-    /// Park a run whose node finished with a result no edge leaves from. Only a
-    /// Cleanup node completes a run, so this is a template wiring error: the run
-    /// waits (not halted) for a person to clean it up, and the work item is not
-    /// moved to Done.
-    /// </summary>
-    private async Task ParkOnDeadEndAsync(
-        LoopRun run, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId, EdgeType edge)
-    {
-        if (!IsAlive(run.Status)) return;
-        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, HumanFeedbackReasons.DeadEnd,
-            $"Dead end: \"{node.Label}\" finished with {edge}, which has no outgoing edge",
-            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 
     private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromMinutes(2);

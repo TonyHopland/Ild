@@ -17,7 +17,7 @@ public class LoopEngineDeadEndTests
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
         Assert.Null(run.CompletedAt);
         Assert.False(run.IsHalted);
-        Assert.Equal(HumanFeedbackReasons.DeadEnd, run.HumanFeedbackReason);
+        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
         Assert.Equal(h.NodesById[node].Id, run.CurrentNodeId);
 
         var parked = Assert.Single(RunTimeline.Events(h.Db, h.RunId, EventType.RunParked));
@@ -26,7 +26,7 @@ public class LoopEngineDeadEndTests
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.DeadEnd), Times.Once);
+            It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.NodeFailed), Times.Once);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);

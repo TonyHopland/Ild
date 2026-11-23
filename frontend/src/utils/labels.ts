@@ -49,7 +49,6 @@ export function workItemStatusTone(status: WorkItemStatus | string): Tone {
 /** The feedback reasons the UI acts on, as the engine writes them. */
 export const FEEDBACK_REASON = {
   NodeFailed: "Node Failed",
-  DeadEnd: "Dead End",
   OutOfMemory: "Out of Memory",
 } as const;
 
@@ -63,7 +62,6 @@ export const RUN_MEMORY_LIMIT_SETTING = "ILD_RUN_MEMORY_LIMIT";
 const FEEDBACK_REASON_DISPLAY: Record<string, { label: string; tone: Tone }> = {
   "Human Input Needed": { label: "Human input needed", tone: "attention" },
   [FEEDBACK_REASON.NodeFailed]: { label: "Node failed", tone: "danger" },
-  [FEEDBACK_REASON.DeadEnd]: { label: "Dead end", tone: "danger" },
   [FEEDBACK_REASON.OutOfMemory]: { label: "Out of memory", tone: "danger" },
   "PR Awaiting Merge": { label: "PR awaiting merge", tone: "info" },
   "Rebase Conflict": { label: "Rebase conflict", tone: "attention" },

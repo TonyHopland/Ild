@@ -158,8 +158,6 @@ export default function HaltSteerControls({
     !!onResumeFailed
       ? (run.nodes?.filter((n) => n.status === LoopRunNodeStatus.Failed).pop() ?? null)
       : null;
-  const deadEnd =
-    isWaitingHuman && !run.isHalted && run.humanFeedbackReason === FEEDBACK_REASON.DeadEnd;
   const outOfMemory = run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
@@ -169,7 +167,7 @@ export default function HaltSteerControls({
   const canAbandon =
     showAbandon && !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
-  if (!canHalt && !canAbandon && !isHalted && !failedNode && !deadEnd) return null;
+  if (!canHalt && !canAbandon && !isHalted && !failedNode) return null;
 
   const handleHalt = async () => {
     if (!onHalt) return;
@@ -308,15 +306,6 @@ export default function HaltSteerControls({
                 Abandon run
               </button>
             ))}
-        </div>
-      )}
-      {deadEnd && (
-        <div className="wiv2-feedback">
-          <div className="wiv2-feedback-title">Dead end — the template has nowhere to go next</div>
-          <div className="feedback-reason">
-            A node finished with a result that has no outgoing edge, so the run stopped here. Clean
-            up to end it; the worktree stays until then, so you can push the branch first.
-          </div>
         </div>
       )}
       {failedNode && failedActions && (
