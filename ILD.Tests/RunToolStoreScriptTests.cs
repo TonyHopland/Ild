@@ -172,12 +172,12 @@ public sealed class RunToolStoreScriptTests : IDisposable
         var sameSdk = Run("tool=dotnet@10.0");
 
         Assert.True(first.ExitCode == 0, first.StdErr);
-        var provider = $"{Root}/nuget-credprovider/2.0.5/10.0.100";
+        var provider = $"{Root}/nuget-credprovider/2.0.6/10.0.100";
         Assert.Equal([$"{Root}/mise/installs/dotnet/10.0/bin", provider], PathOf(first.StdOut));
         Assert.True(File.Exists(Path.Combine(provider, NuGetCredentialProvider.ToolCommand)));
         Assert.Equal(first.StdOut, again.StdOut);
         Assert.Contains(provider, PathOf(sameSdk.StdOut));
-        Assert.Equal(["dotnet@10", "credprovider 2.0.5", "dotnet@10.0"], Installs());
+        Assert.Equal(["dotnet@10", "credprovider 2.0.6", "dotnet@10.0"], Installs());
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
         var result = Run("tool=dotnet@10");
 
         Assert.True(result.ExitCode == 0, result.StdErr);
-        Assert.Contains($"{Root}/nuget-credprovider/2.0.5/10.0.100", PathOf(result.StdOut));
-        Assert.Equal(["dotnet@10", "credprovider 2.0.5"], Installs());
+        Assert.Contains($"{Root}/nuget-credprovider/2.0.6/10.0.100", PathOf(result.StdOut));
+        Assert.Equal(["dotnet@10", "credprovider 2.0.6"], Installs());
     }
 }

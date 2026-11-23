@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The .NET libraries are updated to the 10.0.15 security release, and the image ships Node 26.13.1 (also a security release) and npm 12.2.3.**
 - **The Action tab no longer jumps or flickers while a run updates.**
 - **A run now parks on a node that finishes with no outgoing edge for its result, instead of completing and moving the item to Done.**
 - **A node no longer waits for processes the agent left running,** only for background work it registered, which is now listed on the node.

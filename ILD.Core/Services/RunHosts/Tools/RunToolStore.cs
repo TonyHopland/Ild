@@ -193,7 +193,7 @@ public static class RunToolStore
 
         # The Azure Artifacts credential provider, pinned. It turns the VSS_NUGET_EXTERNAL_FEED_ENDPOINTS ILD hands a
         # run into credentials for its private NuGet feeds; without it a restore from one fails with a 401.
-        credprovider_version=2.0.5
+        credprovider_version=2.0.6
 
         # Gives a .NET toolchain the credential provider, on its PATH, where NuGet looks for nuget-plugin-* commands
         # from SDK 9.0.200 on. An older SDK does not look there, so it gets none. Installed once per SDK version.

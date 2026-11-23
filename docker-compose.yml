@@ -64,8 +64,8 @@ services:
       args:
         NODE_VERSION: ${NODE_VERSION:-26-alpine}
         DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
-        NODE_RUNTIME_VERSION: ${NODE_RUNTIME_VERSION:-26.13.0}
-        NPM_VERSION: ${NPM_VERSION-12.2.1}
+        NODE_RUNTIME_VERSION: ${NODE_RUNTIME_VERSION:-26.13.1}
+        NPM_VERSION: ${NPM_VERSION-12.2.3}
         WITH_CERTS: ${WITH_CERTS:-0}
     # ILD joins each run's and chat's network by this name, and they reach it by
     # it (ILD_CONTAINER_ILD_CONTAINER and ILD_API_URL below).

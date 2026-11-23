@@ -971,50 +971,48 @@ describe("RunsPanel run details", () => {
   });
 
   test("a node's events are read only once expanded, and only its own", async () => {
-    const getEvents = vi
-      .spyOn(loopRunService, "getEvents")
-      .mockImplementation(async (_r, cursor) =>
-        cursor === 0
-          ? {
-              entries: [
-                {
-                  id: 1,
-                  runId: RUN_A,
-                  eventType: "NodeStarted",
-                  nodeId: "n-build",
-                  runNodeId: "rn-1",
-                  payload: "build started",
-                  timestamp: "2025-01-01T00:00:00Z",
-                },
-                {
-                  id: 2,
-                  runId: RUN_A,
-                  eventType: "NodeStarted",
-                  nodeId: "n-review",
-                  runNodeId: "rn-2",
-                  payload: "review started",
-                  timestamp: "2025-01-01T00:00:00Z",
-                },
-              ],
-              nextCursor: 2,
-              hasMore: true,
-            }
-          : {
-              entries: [
-                {
-                  id: 3,
-                  runId: RUN_A,
-                  eventType: "NodeCompleted",
-                  nodeId: "n-build",
-                  runNodeId: "rn-1",
-                  payload: "build done",
-                  timestamp: "2025-01-01T00:01:00Z",
-                },
-              ],
-              nextCursor: 3,
-              hasMore: false,
-            },
-      );
+    const getEvents = vi.spyOn(loopRunService, "getEvents").mockImplementation(async (_r, cursor) =>
+      cursor === 0
+        ? {
+            entries: [
+              {
+                id: 1,
+                runId: RUN_A,
+                eventType: "NodeStarted",
+                nodeId: "n-build",
+                runNodeId: "rn-1",
+                payload: "build started",
+                timestamp: "2025-01-01T00:00:00Z",
+              },
+              {
+                id: 2,
+                runId: RUN_A,
+                eventType: "NodeStarted",
+                nodeId: "n-review",
+                runNodeId: "rn-2",
+                payload: "review started",
+                timestamp: "2025-01-01T00:00:00Z",
+              },
+            ],
+            nextCursor: 2,
+            hasMore: true,
+          }
+        : {
+            entries: [
+              {
+                id: 3,
+                runId: RUN_A,
+                eventType: "NodeCompleted",
+                nodeId: "n-build",
+                runNodeId: "rn-1",
+                payload: "build done",
+                timestamp: "2025-01-01T00:01:00Z",
+              },
+            ],
+            nextCursor: 3,
+            hasMore: false,
+          },
+    );
     renderDetails(twoNodeRun());
     fireEvent.click(await screen.findByRole("button", { name: /Build/ }));
     const events = toggle(/^▸\s*events$/i);
