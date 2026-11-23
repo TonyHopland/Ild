@@ -148,6 +148,10 @@ public class LoopEngineRoutingTests
         h.AddNode("h", NodeType.Human);
         h.AddNode("after", NodeType.Cmd);
         h.AddEdge("h", "after", EdgeType.Custom, "Respond");
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("after", "c", EdgeType.OnSuccess);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("cleanup"), new NodeOutcome.Terminal("done")));
 
         var humanExec = new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("ask"),
@@ -177,14 +181,14 @@ public class LoopEngineRoutingTests
         Assert.Equal(LoopRunStatus.Completed, run.Status);
 
         var nodes = h.ReloadRunNodes().OrderBy(n => n.StartedAt).ToList();
-        // 1 WaitingHuman + 1 Succeeded human re-entry + 1 Cmd "after"
-        Assert.Equal(3, nodes.Count);
+        // 1 WaitingHuman + 1 Succeeded human re-entry + 1 Cmd "after" + 1 Cleanup
+        Assert.Equal(4, nodes.Count);
         Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[1].Status);
         Assert.Equal("after-output", nodes[2].Output);
     }
 
     [Fact]
-    public async Task Custom_edge_with_no_connection_parks_run_with_missing_edge_reason()
+    public async Task Custom_edge_with_no_connection_parks_run_as_a_dead_end()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.AI);
@@ -202,8 +206,8 @@ public class LoopEngineRoutingTests
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
         Assert.Null(run.CompletedAt);
-        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
-        Assert.Equal("missing edge connection: Escalate",
+        Assert.Equal(HumanFeedbackReasons.DeadEnd, run.HumanFeedbackReason);
+        Assert.Equal("Dead end: \"a\" finished with Escalate, which has no outgoing edge",
             Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.RunParked).Data);
         Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.LoopRunFailed);
     }

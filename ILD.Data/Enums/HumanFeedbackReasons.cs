@@ -16,6 +16,9 @@ public static class HumanFeedbackReasons
     /// <summary>A node failed and there is no on_failure edge to follow.</summary>
     public const string NodeFailed = "Node Failed";
 
+    /// <summary>A node finished with a result no edge leads on from, and it is not a Cleanup node.</summary>
+    public const string DeadEnd = "Dead End";
+
     /// <summary>Recovery on startup left the run in a state that needs review.</summary>
     public const string RecoveryRequiresReview = "Recovery requires review";
 

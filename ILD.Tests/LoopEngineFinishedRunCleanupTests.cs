@@ -77,6 +77,38 @@ public class LoopEngineFinishedRunCleanupTests
     }
 
     [Fact]
+    public async Task A_run_parked_at_a_dead_end_keeps_its_local_state_until_it_is_cancelled()
+    {
+        var reclaimer = ReclaimerRemovingNothing();
+        using var h = NewHarness(reclaimer, out _);
+        h.AddNode("pr", NodeType.AI, "Pull Request");
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("work"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "done")));
+        var run = h.SeedRun("pr");
+        await GiveLocalStateAsync(h, run);
+
+        await h.LaunchAsync();
+        await h.WaitUntilIdleAsync();
+
+        var parked = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, parked.Status);
+        Assert.Equal(HumanFeedbackReasons.DeadEnd, parked.HumanFeedbackReason);
+        Assert.Equal("/tmp/wt/engine-run", parked.WorktreePath);
+        Assert.Equal("ild/wi-x-run-engine", parked.BranchName);
+        Assert.Equal(1, FinishedRunCleanerWiring.SnapshotCount(h.Db, run.Id));
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+
+        await h.Engine.CancelRunAsync(run.Id);
+
+        var after = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.Cancelled, after.Status);
+        Assert.Null(after.WorktreePath);
+        Assert.Null(after.BranchName);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+    }
+
+    [Fact]
     public async Task A_run_whose_removal_fails_still_completes_and_its_item_still_goes_to_Done()
     {
         var reclaimer = new Mock<IRunReclaimer>();

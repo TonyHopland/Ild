@@ -544,3 +544,46 @@ describe("HaltSteerControls after a node failed", () => {
     expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
   });
 });
+
+describe("HaltSteerControls on a dead end", () => {
+  function renderDeadEnd(props: Partial<Parameters<typeof HaltSteerControls>[0]> = {}) {
+    const onRetryFailed = vi.fn();
+    const onResumeFailed = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: false,
+          humanFeedbackReason: "Dead End",
+          currentNodeId: "n-2",
+          nodes: [
+            node({ id: "rn-1", nodeId: "n-1", status: LoopRunNodeStatus.Failed }),
+            node({
+              id: "rn-2",
+              nodeId: "n-2",
+              nodeLabel: "Pull Request",
+              status: LoopRunNodeStatus.Succeeded,
+            }),
+          ],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onRetryFailed={onRetryFailed}
+        onResumeFailed={onResumeFailed}
+        onCleanupBacklog={vi.fn()}
+        {...props}
+      />,
+      { wrapper: MemoryRouter },
+    );
+  }
+
+  test("says nothing leads on from the node and offers cleanup, never retry or resume", () => {
+    renderDeadEnd();
+
+    expect(screen.getByText("Dead end — nothing leads on from this node")).toBeTruthy();
+    expect(screen.getByText(/Pull Request/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Abandon run" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resume node" })).toBeNull();
+    expect(screen.queryByText("Node failed — retry or resume")).toBeNull();
+  });
+});

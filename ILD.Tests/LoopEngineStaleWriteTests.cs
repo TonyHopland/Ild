@@ -51,6 +51,10 @@ public class LoopEngineStaleWriteTests
     {
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.Cmd);
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("a", "c", EdgeType.OnSuccess);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("cleanup"), new NodeOutcome.Terminal("done")));
         var run = h.SeedRun("a");
 
         // User pins the run (PUT /loopruns/{id}/retain) while the node runs.
@@ -65,7 +69,7 @@ public class LoopEngineStaleWriteTests
         await h.RunAsync();
 
         var after = h.ReloadRun();
-        // No outgoing edge: the run completed — but the pin must survive,
+        // The run reached Cleanup and completed — but the pin must survive,
         // otherwise the retention sweeper later deletes a pinned run.
         Assert.Equal(LoopRunStatus.Completed, after.Status);
         Assert.True(after.Retain);
