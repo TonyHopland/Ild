@@ -546,55 +546,44 @@ describe("HaltSteerControls after a node failed", () => {
 });
 
 describe("HaltSteerControls on a dead end", () => {
-  function renderParked(nodes: LoopRunNode[]) {
+  function renderDeadEnd(props: Partial<Parameters<typeof HaltSteerControls>[0]> = {}) {
+    const onRetryFailed = vi.fn();
+    const onResumeFailed = vi.fn();
     render(
       <HaltSteerControls
         run={run({
           status: LoopRunStatus.WaitingHuman,
           isHalted: false,
-          humanFeedbackReason: "Node Failed",
+          humanFeedbackReason: "Dead End",
           currentNodeId: "n-2",
-          nodes,
+          nodes: [
+            node({ id: "rn-1", nodeId: "n-1", status: LoopRunNodeStatus.Failed }),
+            node({
+              id: "rn-2",
+              nodeId: "n-2",
+              nodeLabel: "Pull Request",
+              status: LoopRunNodeStatus.Succeeded,
+            }),
+          ],
         })}
         workItemStatus={WorkItemStatus.HumanFeedback}
-        onRetryFailed={vi.fn()}
-        onResumeFailed={vi.fn()}
+        onRetryFailed={onRetryFailed}
+        onResumeFailed={onResumeFailed}
         onCleanupBacklog={vi.fn()}
+        {...props}
       />,
       { wrapper: MemoryRouter },
     );
   }
 
-  test("a node that succeeded with nowhere to go says so, with cleanup and no retry or resume", () => {
-    renderParked([
-      node({
-        id: "rn-2",
-        nodeId: "n-2",
-        nodeLabel: "Pull Request",
-        status: LoopRunNodeStatus.Succeeded,
-      }),
-    ]);
+  test("says nothing leads on from the node and offers cleanup, never retry or resume", () => {
+    renderDeadEnd();
 
     expect(screen.getByText("Dead end — nothing leads on from this node")).toBeTruthy();
-    expect(screen.getByText(/Pull Request finished/)).toBeTruthy();
+    expect(screen.getByText(/Pull Request/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Abandon run" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Resume node" })).toBeNull();
-  });
-
-  test("an earlier failure that was retried is not offered again", () => {
-    renderParked([
-      node({ id: "rn-1", nodeId: "n-1", status: LoopRunNodeStatus.Failed, error: "exit code 2" }),
-      node({
-        id: "rn-2",
-        nodeId: "n-2",
-        nodeLabel: "Pull Request",
-        status: LoopRunNodeStatus.Succeeded,
-      }),
-    ]);
-
-    expect(screen.getByText("Dead end — nothing leads on from this node")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Retry node" })).toBeNull();
     expect(screen.queryByText("Node failed — retry or resume")).toBeNull();
   });
 });

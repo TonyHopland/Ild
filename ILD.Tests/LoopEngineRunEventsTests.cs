@@ -224,7 +224,7 @@ public class LoopEngineRunEventsTests
 
         await h.RunAsync();
 
-        Assert.Contains("missing edge connection: approve", Assert.Single(Events(h, EventType.RunParked)).Data);
+        Assert.Contains("finished with approve, which has no outgoing edge", Assert.Single(Events(h, EventType.RunParked)).Data);
         Assert.Empty(RunTimeline.EndingEvents(h.Db, h.RunId));
     }
 

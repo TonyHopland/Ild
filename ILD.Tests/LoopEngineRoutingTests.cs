@@ -188,7 +188,7 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task Custom_edge_with_no_connection_parks_run_with_missing_edge_reason()
+    public async Task Custom_edge_with_no_connection_parks_run_as_a_dead_end()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.AI);
@@ -206,8 +206,8 @@ public class LoopEngineRoutingTests
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
         Assert.Null(run.CompletedAt);
-        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
-        Assert.Equal("missing edge connection: Escalate",
+        Assert.Equal(HumanFeedbackReasons.DeadEnd, run.HumanFeedbackReason);
+        Assert.Equal("Dead end: \"a\" finished with Escalate, which has no outgoing edge",
             Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.RunParked).Data);
         Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.LoopRunFailed);
     }

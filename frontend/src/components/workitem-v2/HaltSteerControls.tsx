@@ -149,22 +149,18 @@ export default function HaltSteerControls({
   const stepCapped = isHalted && isStepCapParked(run);
   const globalMissing = isHalted && isGlobalMissingParked(run);
   // The node the run is parked on after it failed, with what the person can do about it.
-  // Only an attempt at the node the run is parked on counts: an earlier failure that was
-  // retried is not something to retry again.
-  const parkedOnFailure =
+  const failedNode =
     isWaitingHuman &&
     !run.isHalted &&
     (run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory ||
-      run.humanFeedbackReason === FEEDBACK_REASON.NodeFailed);
-  const failedAttempt = parkedOnFailure
-    ? (run.nodes
-        ?.filter((n) => n.nodeId === run.currentNodeId && n.status === LoopRunNodeStatus.Failed)
-        .pop() ?? null)
-    : null;
-  const failedNode = failedAttempt && !!onRetryFailed && !!onResumeFailed ? failedAttempt : null;
-  // Parked as "Node Failed" with no failed attempt on the current node: the node
-  // finished, but nothing leads on from its result.
-  const deadEnd = parkedOnFailure && !failedAttempt;
+      run.humanFeedbackReason === FEEDBACK_REASON.NodeFailed) &&
+    !!onRetryFailed &&
+    !!onResumeFailed
+      ? (run.nodes?.filter((n) => n.status === LoopRunNodeStatus.Failed).pop() ?? null)
+      : null;
+  // A node finished but nothing leads on from its result: only cleanup is left.
+  const deadEnd =
+    isWaitingHuman && !run.isHalted && run.humanFeedbackReason === FEEDBACK_REASON.DeadEnd;
   const outOfMemory = run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for

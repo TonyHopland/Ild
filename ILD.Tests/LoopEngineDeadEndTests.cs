@@ -11,13 +11,13 @@ namespace ILD.Tests;
 /// </summary>
 public class LoopEngineDeadEndTests
 {
-    private static void AssertParkedAtDeadEnd(LoopEngineHarness h, string node, string reason)
+    private static void AssertParked(LoopEngineHarness h, string node, string reason, string feedbackReason)
     {
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
         Assert.Null(run.CompletedAt);
         Assert.False(run.IsHalted);
-        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
+        Assert.Equal(feedbackReason, run.HumanFeedbackReason);
         Assert.Equal(h.NodesById[node].Id, run.CurrentNodeId);
 
         var parked = Assert.Single(RunTimeline.Events(h.Db, h.RunId, EventType.RunParked));
@@ -26,7 +26,7 @@ public class LoopEngineDeadEndTests
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason, It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.NodeFailed), Times.Once);
+            reason, It.IsAny<string?>(), h.RunId, feedbackReason), Times.Once);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
@@ -47,15 +47,15 @@ public class LoopEngineDeadEndTests
     {
         using var h = await ParkedAfterAsync(new NodeOutcome.Success(EdgeType.OnSuccess, "ok"));
 
-        AssertParkedAtDeadEnd(h, "pr", "Dead end: \"Pull Request\" finished with OnSuccess, which has no outgoing edge");
+        AssertParked(h, "pr", "Dead end: \"Pull Request\" finished with OnSuccess, which has no outgoing edge", HumanFeedbackReasons.DeadEnd);
     }
 
     [Fact]
-    public async Task A_named_output_with_no_edge_parks_naming_the_output()
+    public async Task A_named_output_with_no_edge_parks_as_a_dead_end_naming_the_output()
     {
         using var h = await ParkedAfterAsync(new NodeOutcome.Success(EdgeType.Custom, "ok", "on_merged"));
 
-        AssertParkedAtDeadEnd(h, "pr", "missing edge connection: on_merged");
+        AssertParked(h, "pr", "Dead end: \"Pull Request\" finished with on_merged, which has no outgoing edge", HumanFeedbackReasons.DeadEnd);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public class LoopEngineDeadEndTests
     {
         using var h = await ParkedAfterAsync(new NodeOutcome.Fail(EdgeType.OnFailure, "boom"));
 
-        AssertParkedAtDeadEnd(h, "pr", "boom");
+        AssertParked(h, "pr", "boom", HumanFeedbackReasons.NodeFailed);
     }
 
     [Fact]

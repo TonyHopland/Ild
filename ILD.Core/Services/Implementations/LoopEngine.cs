@@ -1211,23 +1211,14 @@ public sealed partial class LoopEngine : ILoopEngine
                         var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge, ok.EdgeName);
                         if (successEdge is null)
                         {
-                            // A named output with no edge wired from it is a
-                            // template wiring error, not a graph terminus: fail the
-                            // node so the human can wire it. Any other result with no
-                            // edge is a dead end: only a Cleanup node ends a run.
-                            if (ok.Edge == EdgeType.Custom && !string.IsNullOrEmpty(ok.EdgeName))
-                            {
-                                // Unlinked: this execution succeeded and its own turn
-                                // already carries what it did.
-                                await ParkOnFailedNodeAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp,
-                                    node, runNodeId: null);
-                                return ParkResult.Stop;
-                            }
-                            // Only a Cleanup node ends a run. Any other node whose
-                            // result has no edge is a dead end in the template: park
-                            // on it, with the unmatched result as the reason.
-                            await ParkOnFailedNodeAsync(run, $"Dead end: \"{node.Label}\" finished with {ok.Edge}, which has no outgoing edge",
-                                loopRunStore, sp, node, runNodeId);
+                            // Only a Cleanup node ends a run. Any other node whose result
+                            // has no edge leading on from it is a dead end in the template
+                            // (a named output with nothing wired from it included): park on it.
+                            // A named output's own turn is already recorded, so that park is
+                            // not linked to this execution.
+                            var named = ok.Edge == EdgeType.Custom && !string.IsNullOrEmpty(ok.EdgeName);
+                            await ParkOnDeadEndAsync(run, loopRunStore, sp, node, named ? ok.EdgeName! : ok.Edge.ToString(),
+                                named ? null : runNodeId);
                             return ParkResult.Stop;
                         }
                         run.CurrentNodeId = successEdge.TargetNodeId;
@@ -1749,11 +1740,9 @@ public sealed partial class LoopEngine : ILoopEngine
     }
 
     /// <summary>
-    /// Park a run on a node with nowhere to go, as "Node Failed", with
-    /// <paramref name="reason"/> recorded in full: the node failed with no on_failure edge,
-    /// or it succeeded with no edge for its result (a dead end). Not a halt: after a failure
-    /// the way on is <see cref="RetryFromNodeAsync"/> on the failed execution; a dead end has
-    /// none, so a person cleans the run up. A run that had already ended before the node ran
+    /// Park a run on a node that failed with nowhere to go, as "Node Failed",
+    /// with <paramref name="reason"/> recorded in full. Not a halt: the way on is
+    /// <see cref="RetryFromNodeAsync"/> on the failed execution. A run that had already ended before the node ran
     /// (<see cref="CleanupRunAsync"/>) stays ended; parking it would bring it back
     /// to life past the checks a reopen makes.
     /// </summary>
@@ -1763,6 +1752,22 @@ public sealed partial class LoopEngine : ILoopEngine
         if (!IsAlive(run.Status)) return;
         await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, humanFeedbackReason,
             reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
+    }
+
+    /// <summary>
+    /// Park a run whose node finished with a result no edge leads on from, as "Dead End".
+    /// Only a Cleanup node completes a run, so this is a template wiring error: the run
+    /// waits (not halted) with its worktree intact for a person to push the branch and
+    /// clean up, and the work item is not moved to Done. There is no retry: the node
+    /// itself succeeded.
+    /// </summary>
+    private async Task ParkOnDeadEndAsync(
+        LoopRun run, ILoopRunStore store, IServiceProvider sp, LoopNode node, string outcome, Guid? runNodeId)
+    {
+        if (!IsAlive(run.Status)) return;
+        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, HumanFeedbackReasons.DeadEnd,
+            $"Dead end: \"{node.Label}\" finished with {outcome}, which has no outgoing edge",
+            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 
     private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromMinutes(2);
