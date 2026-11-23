@@ -128,3 +128,35 @@ describe("useRunView's run detail", () => {
     expect(result.current.run).toBe(finished);
   });
 });
+
+describe("useRunView's conversation", () => {
+  test("keeps the same messages array when a read adds nothing new", async () => {
+    const emit = stageHub();
+    stageReads();
+    const message = {
+      id: 1,
+      role: "ai",
+      name: "Dev",
+      text: "Hello",
+      timestamp: "2026-09-24T09:00:00Z",
+    };
+    vi.spyOn(loopRunService, "getConversation").mockResolvedValue({
+      runId: "run-1",
+      messages: [message],
+      lastEventId: 1,
+    } as unknown as Awaited<ReturnType<typeof loopRunService.getConversation>>);
+    const { result } = renderHook(() =>
+      useRunView("run-1", 0, { isCurrent: true, run: makeRun() }),
+    );
+    await flushPromises();
+    const first = result.current.messages;
+    expect(first).toHaveLength(1);
+
+    await act(async () => {
+      await emit("EventLogged", "run-1");
+    });
+    await flushPromises();
+
+    expect(result.current.messages).toBe(first);
+  });
+});

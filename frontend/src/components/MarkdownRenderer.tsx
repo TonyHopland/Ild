@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { opensInNewTab } from "../utils/linkTarget";
@@ -21,7 +22,7 @@ interface MarkdownRendererProps {
  * Renders markdown content with GFM support (tables, strikethrough, etc.).
  * Falls back to plain text when content is empty.
  */
-export default function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+export default memo(function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
   if (!content) {
     return null;
   }
@@ -33,4 +34,4 @@ export default function MarkdownRenderer({ content, className }: MarkdownRendere
       </ReactMarkdown>
     </div>
   );
-}
+});

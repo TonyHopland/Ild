@@ -339,6 +339,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The scrollbar appearing must not reflow the text. */
+  scrollbar-gutter: stable;
   padding: var(--space-5);
 }
 
