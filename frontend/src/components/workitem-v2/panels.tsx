@@ -407,7 +407,7 @@ export function FeedbackBanner({
         needsConfirm={outputs?.status === "ready" ? outputs.needsConfirm : undefined}
         colorOf={outputs?.status === "ready" ? outputs.colorOf : undefined}
         defaultOutput={outputs?.status === "ready" ? outputs.defaultOutput : null}
-        pending={outputs === null || outputs.status === "loading"}
+        answersPending={outputs === null || outputs.status === "loading"}
         submitDefaultOnEnter={submitDefaultOnEnter}
       />
       {detail.feedbackOutputs.status === "error" && (

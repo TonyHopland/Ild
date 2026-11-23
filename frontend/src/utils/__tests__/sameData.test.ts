@@ -14,3 +14,12 @@ describe("sameData", () => {
     expect(sameData(null, { id: 1 })).toBe(false);
   });
 });
+
+describe("sameData structure", () => {
+  test("ignores key order and compares nested data and arrays", () => {
+    expect(sameData({ a: 1, b: { c: [1, 2] } }, { b: { c: [1, 2] }, a: 1 })).toBe(true);
+    expect(sameData({ a: [1, 2] }, { a: [2, 1] })).toBe(false);
+    expect(sameData({ a: 1 }, { a: 1, b: undefined })).toBe(false);
+    expect(sameData([], {})).toBe(false);
+  });
+});

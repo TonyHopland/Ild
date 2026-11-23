@@ -470,11 +470,12 @@
 }
 
 /* Where the answers will be, until they are known. */
+/* A button in size (it takes the row's button padding), so the row does not change height when they arrive. */
 .feedback-actions-pending {
   flex: 1;
-  min-height: 2rem;
-  border-radius: 6px;
+  border: 0;
   background: color-mix(in srgb, var(--border) 40%, transparent);
+  pointer-events: none;
 }
 
 /* Reject goes last, on its own at the far end of the row. */

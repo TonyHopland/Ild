@@ -1224,12 +1224,13 @@ describe("the answers on a parked item", () => {
   test("keep their room while the parked node's outputs load, then the buttons take it", async () => {
     const staged = stageParkedNode();
     const read = deferred<LoopRun>();
-    staged.getRun.mockReturnValue(read.promise);
+    // mockServices stubs the run read too, so the held read is staged after it.
     mockServices(parkedRun("n-parked"), [], []);
     staged.getRun.mockReturnValue(read.promise);
     const panel = await openActionTab(parkedItem());
 
     expect(panel.querySelector(".feedback-actions-pending")).not.toBeNull();
+    expect(within(panel).getByRole("status", { name: "Loading answers" })).toBeTruthy();
     expect(within(panel).queryByRole("button", { name: "Approve" })).toBeNull();
 
     await act(async () => read.resolve(parkedRun("n-parked")));
@@ -1239,7 +1240,7 @@ describe("the answers on a parked item", () => {
     expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
   });
 
-  test("keep their room while the same item is read again, so the thread does not shrink and grow", async () => {
+  test("stay in place while the same item is read again, and the placeholder is for the first load only", async () => {
     const staged = stageParkedNode();
     mockServices(parkedRun("n-parked"), [], []);
     const panel = await openActionTab(parkedItem());
@@ -1248,7 +1249,7 @@ describe("the answers on a parked item", () => {
     staged.getRun.mockReturnValue(deferred<LoopRun>().promise);
     await rerenderDialog({ ...parkedItem() });
 
-    expect(within(panel).queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(panel.querySelector(".feedback-actions-pending")).not.toBeNull();
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(panel.querySelector(".feedback-actions-pending")).toBeNull();
   });
 });
