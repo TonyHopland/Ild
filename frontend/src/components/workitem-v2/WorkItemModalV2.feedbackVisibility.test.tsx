@@ -490,7 +490,7 @@ describe("a work item's actions are filtered only with the node read for that sa
     for (const name of RESERVED_BUTTONS) expect(shown.has(name), name).toBe(false);
   });
 
-  test("the same item fetched again offers nothing until its run has been read again, at the cost of that read only", async () => {
+  test("the same item fetched again keeps offering what was read, and reads its run again once", async () => {
     mockDialogServices();
     const staged = stageTwoNodes();
     const { rerender } = await renderDialog(onHumanNode());
@@ -502,7 +502,7 @@ describe("a work item's actions are filtered only with the node read for that sa
     await settle();
 
     expect(staged.reads.length).toBeGreaterThan(asked);
-    expectButtons([]);
+    expectButtons(["Approve", "Reject"]);
 
     await staged.answer(asked, "n-a");
 

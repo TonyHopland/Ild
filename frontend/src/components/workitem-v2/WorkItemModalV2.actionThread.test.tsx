@@ -1213,3 +1213,43 @@ describe("a run stopped on a failed node", () => {
     expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("true");
   });
 });
+
+describe("the answers on a parked item", () => {
+  const parkedItem = () =>
+    makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+  test("keep their room while the parked node's outputs load, then the buttons take it", async () => {
+    const staged = stageParkedNode();
+    const read = deferred<LoopRun>();
+    // mockServices stubs the run read too, so the held read is staged after it.
+    mockServices(parkedRun("n-parked"), [], []);
+    staged.getRun.mockReturnValue(read.promise);
+    const panel = await openActionTab(parkedItem());
+
+    expect(panel.querySelector(".feedback-actions-pending")).not.toBeNull();
+    expect(within(panel).getByRole("status", { name: "Loading answers" })).toBeTruthy();
+    expect(within(panel).queryByRole("button", { name: "Approve" })).toBeNull();
+
+    await act(async () => read.resolve(parkedRun("n-parked")));
+    await flushPromises();
+
+    expect(panel.querySelector(".feedback-actions-pending")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  test("stay in place while the same item is read again, and the placeholder is for the first load only", async () => {
+    const staged = stageParkedNode();
+    mockServices(parkedRun("n-parked"), [], []);
+    const panel = await openActionTab(parkedItem());
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+
+    staged.getRun.mockReturnValue(deferred<LoopRun>().promise);
+    await rerenderDialog({ ...parkedItem() });
+
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(panel.querySelector(".feedback-actions-pending")).toBeNull();
+  });
+});

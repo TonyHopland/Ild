@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -22,6 +22,7 @@ import {
 import { useSignalR } from "../../hooks/useSignalR";
 import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { sameData } from "../../utils/sameData";
 import { useRunActionLock } from "./useRunActionLock";
 import {
   outputColorOf,
@@ -1075,10 +1076,24 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   };
 
-  const feedbackOutputs =
-    workItem && parkedOutputs?.forWorkItem === workItem
-      ? parkedOutputs.outputs
-      : FEEDBACK_OUTPUTS_LOADING;
+  // While the same item is read again, the outputs read for it stay on offer (a
+  // re-read of an unchanged item is not a new node), so the answers do not vanish
+  // and come back; an item that changed has none until its own read lands. The
+  // comparison covers the item's updatedAt and current node label, so a node
+  // change that leaves both untouched (a loop returning to a node of the same
+  // label) would keep the old buttons on offer until the re-read lands. That is
+  // acceptable: the server refuses an output the node does not offer, and the
+  // re-read replaces them within a request.
+  const feedbackOutputs = useMemo(
+    () =>
+      workItem &&
+      parkedOutputs &&
+      (parkedOutputs.forWorkItem === workItem ||
+        (parkedOutputs.outputs.status === "ready" && sameData(parkedOutputs.forWorkItem, workItem)))
+        ? parkedOutputs.outputs
+        : FEEDBACK_OUTPUTS_LOADING,
+    [workItem, parkedOutputs],
+  );
 
   return {
     runs,

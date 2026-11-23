@@ -10,6 +10,7 @@ import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
 import HumanInputProposalCard from "../HumanInputProposalCard";
 import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
 import { placeActionProposals, placeHumanInputProposals } from "../editProposalPlacement";
+import { sameData } from "../../utils/sameData";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import BackgroundTasks from "../NodeTimeline/BackgroundTasks";
@@ -209,7 +210,7 @@ function useTurnVariables(workItemId: string, refreshKey: number): TurnVariableC
       .getTurnVariables(workItemId)
       .catch(() => [])
       .then((c) => {
-        if (!cancelled) setChanges(c);
+        if (!cancelled) setChanges((had) => (sameData(had, c) ? had : c));
       });
     return () => {
       cancelled = true;

@@ -128,3 +128,59 @@ describe("useRunView's run detail", () => {
     expect(result.current.run).toBe(finished);
   });
 });
+
+describe("useRunView's conversation", () => {
+  test("keeps the same messages array when a read adds nothing new", async () => {
+    const emit = stageHub();
+    stageReads();
+    const message = {
+      id: 1,
+      role: "ai",
+      name: "Dev",
+      text: "Hello",
+      timestamp: "2026-09-24T09:00:00Z",
+    };
+    vi.spyOn(loopRunService, "getConversation").mockResolvedValue({
+      runId: "run-1",
+      messages: [message],
+      lastEventId: 1,
+    } as unknown as Awaited<ReturnType<typeof loopRunService.getConversation>>);
+    const { result } = renderHook(() =>
+      useRunView("run-1", 0, { isCurrent: true, run: makeRun() }),
+    );
+    await flushPromises();
+    const first = result.current.messages;
+    expect(first).toHaveLength(1);
+
+    await act(async () => {
+      await emit("EventLogged", "run-1");
+    });
+    await flushPromises();
+
+    expect(result.current.messages).toBe(first);
+  });
+});
+
+describe("useRunView's run detail read again", () => {
+  test("keeps the run it has when the read says the same", async () => {
+    stageHub();
+    vi.spyOn(loopRunService, "getConversation").mockResolvedValue({
+      runId: "run-1",
+      messages: [],
+      lastEventId: null,
+    } as unknown as Awaited<ReturnType<typeof loopRunService.getConversation>>);
+    vi.spyOn(loopRunService, "getById").mockImplementation(() => Promise.resolve(makeRun()));
+    const { result, rerender } = renderHook(
+      ({ settled }) => useRunView("run-1", settled, { isCurrent: false, run: null }),
+      { initialProps: { settled: 0 } },
+    );
+    await flushPromises();
+    const first = result.current.run;
+    expect(first).not.toBeNull();
+
+    rerender({ settled: 1 });
+    await flushPromises();
+
+    expect(result.current.run).toBe(first);
+  });
+});

@@ -469,6 +469,15 @@
   text-align: center;
 }
 
+/* Where the answers will be, until they are known. It is a button in size: it keeps
+   the button's transparent border and the row's padding, so the row does not change
+   height when they arrive. */
+.feedback-actions-pending {
+  flex: 1;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  pointer-events: none;
+}
+
 /* Reject goes last, on its own at the far end of the row. */
 .feedback-actions > .btn-danger:last-child {
   margin-left: auto;
