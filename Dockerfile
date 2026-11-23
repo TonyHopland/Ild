@@ -76,8 +76,8 @@ RUN rid="linux-$( [ "${TARGETARCH:-amd64}" = "arm64" ] && echo arm64 || echo x64
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
-ARG NODE_RUNTIME_VERSION=26.13.0
-ARG NPM_VERSION=12.2.1
+ARG NODE_RUNTIME_VERSION=26.13.1
+ARG NPM_VERSION=12.2.3
 ARG WITH_CERTS=0
 # Not APP_UID/APP_GID: the .NET base images set those as ENV (1654), and an ENV wins over an ARG of the same
 # name, which silently made ild uid 1654.

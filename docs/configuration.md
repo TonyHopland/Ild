@@ -809,8 +809,8 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `WITH_CERTS`           | Import `.crt` or `.pem` files from `certs/` into ILD's image at build time; the runner image does not get them |
 | `DOTNET_VERSION`       | Tag of the .NET SDK and ASP.NET runtime images ILD is built and runs on (default `10.0`)                       |
 | `NODE_VERSION`         | Tag of the Node image the frontend is built with (default `26-alpine`)                                         |
-| `NODE_RUNTIME_VERSION` | Node in ILD's image, which installs the coding agents (default `26.13.0`; see below)                           |
-| `NPM_VERSION`          | npm installed over the one Node ships (default `12.2.1`; see below)                                            |
+| `NODE_RUNTIME_VERSION` | Node in ILD's image, which installs the coding agents (default `26.13.1`; see below)                           |
+| `NPM_VERSION`          | npm installed over the one Node ships (default `12.2.3`; see below)                                            |
 | `ILD_UID` / `ILD_GID`  | uid and gid of the `ild` user ILD runs as (default 10001)                                                      |
 | `RUNNER_WITH_CHROME`   | `runner` target only: `0` builds the runner image without Chrome (default `1`)                                 |
 
@@ -856,8 +856,8 @@ in the background; the **AI Provider** page shows each agent's current/latest
 version, lets you trigger an install or update manually, and reports failures
 (e.g. the npm registry being unreachable).
 
-The image installs Node `NODE_RUNTIME_VERSION` (26.13.0 by default, `latest`
-for the newest) and then npm `NPM_VERSION` (12.2.1 by default) in place of the
+The image installs Node `NODE_RUNTIME_VERSION` (26.13.1 by default, `latest`
+for the newest) and then npm `NPM_VERSION` (12.2.3 by default) in place of the
 npm that Node ships. `NPM_VERSION` takes an exact version, not a range or
 `latest`: the build checks that npm reports exactly that version for the `ild`
 user, and fails otherwise. An empty `NPM_VERSION` keeps the npm bundled with
@@ -1116,7 +1116,7 @@ however good the PAT is.
 
 **In a run's container or pod, the [toolchain store](#run-toolchains) installs
 it** with each .NET SDK from 9.0.200 on: the `Microsoft.Artifacts.CredentialProvider.NuGet.Tool`
-tool, version 2.0.5, once per SDK version, on that toolchain's `PATH`, where
+tool, version 2.0.6, once per SDK version, on that toolchain's `PATH`, where
 NuGet looks for it. A store filled before this gets it the next time a run needs
 that SDK. An older SDK does not look on `PATH`, so it gets none and the
 installer's log says so; pin 9.0.200 or later (in `global.json`, or `run.tools`)
@@ -1134,7 +1134,7 @@ output). ILD's image has no SDK, so it shows nothing. Install the provider for
 the user the agent runs as:
 
 - with a .NET SDK 9.0.200 or later,
-  `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.5`,
+  `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.6`,
   with `~/.dotnet/tools` on that user's `PATH`;
 - with an older SDK, Microsoft's `installcredprovider.sh`, which puts the plugin
   in `~/.nuget/plugins`.
