@@ -1749,9 +1749,11 @@ public sealed partial class LoopEngine : ILoopEngine
     }
 
     /// <summary>
-    /// Park a run on a node that failed with nowhere to go, as "Node Failed",
-    /// with <paramref name="reason"/> recorded in full. Not a halt: the way on is
-    /// <see cref="RetryFromNodeAsync"/> on the failed execution. A run that had already ended before the node ran
+    /// Park a run on a node with nowhere to go, as "Node Failed", with
+    /// <paramref name="reason"/> recorded in full: the node failed with no on_failure edge,
+    /// or it succeeded with no edge for its result (a dead end). Not a halt: after a failure
+    /// the way on is <see cref="RetryFromNodeAsync"/> on the failed execution; a dead end has
+    /// none, so a person cleans the run up. A run that had already ended before the node ran
     /// (<see cref="CleanupRunAsync"/>) stays ended; parking it would bring it back
     /// to life past the checks a reopen makes.
     /// </summary>

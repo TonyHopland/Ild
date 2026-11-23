@@ -26,7 +26,7 @@ public class LoopEngineDeadEndTests
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.NodeFailed), Times.Once);
+            reason, It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.NodeFailed), Times.Once);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
@@ -48,6 +48,22 @@ public class LoopEngineDeadEndTests
         using var h = await ParkedAfterAsync(new NodeOutcome.Success(EdgeType.OnSuccess, "ok"));
 
         AssertParkedAtDeadEnd(h, "pr", "Dead end: \"Pull Request\" finished with OnSuccess, which has no outgoing edge");
+    }
+
+    [Fact]
+    public async Task A_named_output_with_no_edge_parks_naming_the_output()
+    {
+        using var h = await ParkedAfterAsync(new NodeOutcome.Success(EdgeType.Custom, "ok", "on_merged"));
+
+        AssertParkedAtDeadEnd(h, "pr", "missing edge connection: on_merged");
+    }
+
+    [Fact]
+    public async Task A_node_failing_with_no_OnFailure_edge_parks_instead_of_completing()
+    {
+        using var h = await ParkedAfterAsync(new NodeOutcome.Fail(EdgeType.OnFailure, "boom"));
+
+        AssertParkedAtDeadEnd(h, "pr", "boom");
     }
 
     [Fact]

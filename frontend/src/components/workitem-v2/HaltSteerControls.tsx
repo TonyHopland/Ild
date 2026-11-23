@@ -149,15 +149,22 @@ export default function HaltSteerControls({
   const stepCapped = isHalted && isStepCapParked(run);
   const globalMissing = isHalted && isGlobalMissingParked(run);
   // The node the run is parked on after it failed, with what the person can do about it.
-  const failedNode =
+  // Only an attempt at the node the run is parked on counts: an earlier failure that was
+  // retried is not something to retry again.
+  const parkedOnFailure =
     isWaitingHuman &&
     !run.isHalted &&
     (run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory ||
-      run.humanFeedbackReason === FEEDBACK_REASON.NodeFailed) &&
-    !!onRetryFailed &&
-    !!onResumeFailed
-      ? (run.nodes?.filter((n) => n.status === LoopRunNodeStatus.Failed).pop() ?? null)
-      : null;
+      run.humanFeedbackReason === FEEDBACK_REASON.NodeFailed);
+  const failedAttempt = parkedOnFailure
+    ? (run.nodes
+        ?.filter((n) => n.nodeId === run.currentNodeId && n.status === LoopRunNodeStatus.Failed)
+        .pop() ?? null)
+    : null;
+  const failedNode = failedAttempt && !!onRetryFailed && !!onResumeFailed ? failedAttempt : null;
+  // Parked as "Node Failed" with no failed attempt on the current node: the node
+  // finished, but nothing leads on from its result.
+  const deadEnd = parkedOnFailure && !failedAttempt;
   const outOfMemory = run.humanFeedbackReason === FEEDBACK_REASON.OutOfMemory;
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
@@ -167,7 +174,7 @@ export default function HaltSteerControls({
   const canAbandon =
     showAbandon && !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
-  if (!canHalt && !canAbandon && !isHalted && !failedNode) return null;
+  if (!canHalt && !canAbandon && !isHalted && !failedNode && !deadEnd) return null;
 
   const handleHalt = async () => {
     if (!onHalt) return;
@@ -306,6 +313,16 @@ export default function HaltSteerControls({
                 Abandon run
               </button>
             ))}
+        </div>
+      )}
+      {deadEnd && (
+        <div className="wiv2-feedback">
+          <div className="wiv2-feedback-title">Dead end — nothing leads on from this node</div>
+          <div className="feedback-reason">
+            {run.nodes?.find((n) => n.nodeId === run.currentNodeId)?.nodeLabel ?? "A node"}{" "}
+            finished, but the template has no outgoing edge for its result, so the run stopped here.
+            Clean up to end it; the worktree stays until then, so you can push the branch first.
+          </div>
         </div>
       )}
       {failedNode && failedActions && (
