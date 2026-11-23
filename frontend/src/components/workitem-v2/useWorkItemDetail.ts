@@ -1078,7 +1078,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // While the same item is read again, the outputs read for it stay on offer (a
   // re-read of an unchanged item is not a new node), so the answers do not vanish
-  // and come back; an item that changed has none until its own read lands.
+  // and come back; an item that changed has none until its own read lands. The
+  // comparison covers the item's updatedAt and current node label, so a node
+  // change that leaves both untouched (a loop returning to a node of the same
+  // label) would keep the old buttons on offer until the re-read lands. That is
+  // acceptable: the server refuses an output the node does not offer, and the
+  // re-read replaces them within a request.
   const feedbackOutputs = useMemo(
     () =>
       workItem &&

@@ -2,7 +2,8 @@
  * Whether two values read from the server hold the same data, compared
  * structurally, key order aside. It stops at the first difference. A wrong
  * "different" costs only a re-render, so it is used to skip state updates, not
- * to decide anything that matters.
+ * to decide anything that matters. It is meant for plain JSON data: two Date or
+ * Map instances, which have no own keys, would compare equal.
  */
 export function sameData(a: unknown, b: unknown): boolean {
   if (a === b) return true;
