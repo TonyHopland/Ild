@@ -339,9 +339,12 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* The scrollbar appearing must not reflow the text. */
-  scrollbar-gutter: stable;
   padding: var(--space-5);
+}
+
+/* The scrollbar appearing as the thread grows must not reflow its text. */
+.wiv2-tabpanel-action {
+  scrollbar-gutter: stable;
 }
 
 .wiv2-tabpanel[hidden] {

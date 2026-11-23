@@ -10,6 +10,7 @@ import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
 import HumanInputProposalCard from "../HumanInputProposalCard";
 import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
 import { placeActionProposals, placeHumanInputProposals } from "../editProposalPlacement";
+import { sameData } from "../../utils/sameData";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import BackgroundTasks from "../NodeTimeline/BackgroundTasks";
@@ -209,7 +210,7 @@ function useTurnVariables(workItemId: string, refreshKey: number): TurnVariableC
       .getTurnVariables(workItemId)
       .catch(() => [])
       .then((c) => {
-        if (!cancelled) setChanges((had) => (JSON.stringify(had) === JSON.stringify(c) ? had : c));
+        if (!cancelled) setChanges((had) => (sameData(had, c) ? had : c));
       });
     return () => {
       cancelled = true;
@@ -276,15 +277,8 @@ function RunThread({
     const thread = threadRef.current;
     const scroller = thread?.closest<HTMLElement>(".wiv2-tabpanel");
     if (!active || !thread || !scroller) return;
-    // At most one snap per frame, however many size changes land in it.
-    let frame = 0;
-    const snap = () => {
-      frame = 0;
-      if (pinnedToBottom.current) scroller.scrollTop = scroller.scrollHeight;
-    };
     const toBottom = () => {
-      if (typeof requestAnimationFrame === "undefined") snap();
-      else if (!frame) frame = requestAnimationFrame(snap);
+      if (pinnedToBottom.current) scroller.scrollTop = scroller.scrollHeight;
     };
     const onScroll = () => {
       pinnedToBottom.current =
@@ -299,7 +293,6 @@ function RunThread({
     return () => {
       scroller.removeEventListener("scroll", onScroll);
       ro?.disconnect();
-      if (frame) cancelAnimationFrame(frame);
     };
   }, [active]);
 

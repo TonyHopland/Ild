@@ -418,7 +418,7 @@ export default function WorkItemModalV2({
         role="tabpanel"
         id="wiv2-panel-action"
         aria-labelledby="wiv2-tab-action"
-        className="wiv2-tabpanel"
+        className="wiv2-tabpanel wiv2-tabpanel-action"
         hidden={activeTab !== "action"}
       >
         <ActionThread

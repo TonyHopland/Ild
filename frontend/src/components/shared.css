@@ -469,6 +469,14 @@
   text-align: center;
 }
 
+/* Where the answers will be, until they are known. */
+.feedback-actions-pending {
+  flex: 1;
+  min-height: 2rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
 /* Reject goes last, on its own at the far end of the row. */
 .feedback-actions > .btn-danger:last-child {
   margin-left: auto;

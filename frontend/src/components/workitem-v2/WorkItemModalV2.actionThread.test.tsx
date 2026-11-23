@@ -1213,3 +1213,42 @@ describe("a run stopped on a failed node", () => {
     expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("true");
   });
 });
+
+describe("the answers on a parked item", () => {
+  const parkedItem = () =>
+    makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+  test("keep their room while the parked node's outputs load, then the buttons take it", async () => {
+    const staged = stageParkedNode();
+    const read = deferred<LoopRun>();
+    staged.getRun.mockReturnValue(read.promise);
+    mockServices(parkedRun("n-parked"), [], []);
+    staged.getRun.mockReturnValue(read.promise);
+    const panel = await openActionTab(parkedItem());
+
+    expect(panel.querySelector(".feedback-actions-pending")).not.toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Approve" })).toBeNull();
+
+    await act(async () => read.resolve(parkedRun("n-parked")));
+    await flushPromises();
+
+    expect(panel.querySelector(".feedback-actions-pending")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  test("keep their room while the same item is read again, so the thread does not shrink and grow", async () => {
+    const staged = stageParkedNode();
+    mockServices(parkedRun("n-parked"), [], []);
+    const panel = await openActionTab(parkedItem());
+    expect(within(panel).getByRole("button", { name: "Approve" })).toBeTruthy();
+
+    staged.getRun.mockReturnValue(deferred<LoopRun>().promise);
+    await rerenderDialog({ ...parkedItem() });
+
+    expect(within(panel).queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(panel.querySelector(".feedback-actions-pending")).not.toBeNull();
+  });
+});

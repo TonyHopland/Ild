@@ -53,6 +53,11 @@ interface FeedbackActionsProps {
     placeholder: string;
     rows: number;
   };
+  /**
+   * The answers are not known yet. Until they are, the row of buttons keeps the
+   * room it will fill, so the thread does not grow beneath the reader.
+   */
+  pending?: boolean;
   /** The parked node's default output, or null when it has none or it is not known yet. */
   defaultOutput?: string | null;
   /** Whether Enter in the feedback box takes the default output, as its button would. */
@@ -90,6 +95,7 @@ export default function FeedbackActions({
   colorOf,
   input,
   defaultOutput = null,
+  pending: answersPending = false,
   submitDefaultOnEnter = false,
 }: FeedbackActionsProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -255,6 +261,9 @@ export default function FeedbackActions({
       ) : (
         <div className="feedback-actions">
           {order.map(button)}
+          {answersPending && order.length === 0 && (
+            <span className="feedback-actions-pending" aria-hidden="true" />
+          )}
           {onMerge && confirmingMerge && (
             <div className="merge-confirm" role="dialog" aria-label="Confirm merge">
               <label className="merge-confirm-option">

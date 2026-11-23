@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { LoopRun, RunConversationMessage } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
 import { loopRunService } from "../../services/auth";
+import { sameData } from "../../utils/sameData";
 import { useSignalR } from "../../hooks/useSignalR";
 
 export interface RunView {
@@ -15,10 +16,6 @@ export interface RunView {
   conversationRead: boolean;
 }
 
-function sameRun(a: LoopRun | null, b: LoopRun): boolean {
-  return a === b || (a !== null && JSON.stringify(a) === JSON.stringify(b));
-}
-
 function merge(
   known: RunConversationMessage[],
   read: RunConversationMessage[],
@@ -28,7 +25,7 @@ function merge(
   let changed = false;
   for (const m of read) {
     const have = byId.get(m.id);
-    if (have && JSON.stringify(have) === JSON.stringify(m)) continue;
+    if (have && sameData(have, m)) continue;
     byId.set(m.id, m);
     changed = true;
   }
@@ -127,7 +124,7 @@ export function useRunView(
         .getById(runId)
         .then(
           (r) => {
-            if (mounted.current) setRun((had) => (sameRun(had, r) ? had : r));
+            if (mounted.current) setRun((had) => (sameData(had, r) ? had : r));
           },
           () => {},
         )
@@ -145,7 +142,7 @@ export function useRunView(
   // A run that stops being the current one keeps showing its last detail until
   // its own read lands.
   useEffect(() => {
-    if (shared) setRun((had) => (sameRun(had, shared) ? had : shared));
+    if (shared) setRun((had) => (sameData(had, shared) ? had : shared));
   }, [shared]);
 
   useEffect(() => {
