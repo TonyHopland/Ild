@@ -51,6 +51,24 @@ public sealed class CredentialImportTests : IDisposable
     }
 
     [Fact]
+    public async Task An_antigravity_token_file_is_found_by_its_name_whatever_the_cli_called_it()
+    {
+        Put(Throwaway, ".config/antigravity/oauth-credentials", "enc");
+        Put(Throwaway, ".config/antigravity/credential-user-scope", "me@example.com");
+        Put(Throwaway, ".config/antigravity/plugin-secrets.json", "{}");
+        Put(Throwaway, ".gemini/antigravity-cli/conversations/c.db", "not a login");
+        Put(Throwaway, ".gemini/antigravity-cli/installation_id", "id");
+
+        var imported = await ImportAsync();
+
+        Assert.Equal(
+            [".config/antigravity/credential-user-scope", ".config/antigravity/oauth-credentials"],
+            imported.Order(StringComparer.Ordinal));
+        Assert.Equal("enc", File.ReadAllText(Path.Combine(Store, ".config", "antigravity", "oauth-credentials")));
+        Assert.False(File.Exists(Path.Combine(Store, ".config", "antigravity", "plugin-secrets.json")));
+    }
+
+    [Fact]
     public async Task A_file_without_a_login_does_not_replace_the_one_in_the_store()
     {
         Put(Store, ".copilot/config.json", "{\"authTokens\":{\"https://github.com:me\":{\"token\":\"keep\"}}}");

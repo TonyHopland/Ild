@@ -57,12 +57,46 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     public override CredentialPath? CredentialPathFor(AiProvider provider)
         => ModelCredentialSource.UpstreamKey(provider) is null ? CredentialPath.ReadOnlyCopy : CredentialPath.Gateway;
 
-    /// <summary>The files, relative to the home, that the CLI keeps its Google sign-in in once it stores tokens in a file.</summary>
+    /// <summary>The files, relative to the home, that earlier builds of the CLI kept the Google sign-in in.</summary>
     internal static readonly string[] LoginFiles =
     [
         ".gemini/antigravity-cli/jetski-standalone-oauth-token",
         ".gemini/antigravity-cli/antigravity-oauth-token",
     ];
+
+    // Where the CLI keeps what it stores in files, and which files in them are a sign-in: it names no file for its token
+    // when it has no keyring, so what was written is found by what it is called.
+    private static readonly string[] LoginFolders = [".config/antigravity", ".gemini/antigravity-cli"];
+    private static readonly System.Text.RegularExpressions.Regex LoginFileName =
+        new("token|auth|credential|oauth|scope", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The sign-in files the CLI left in <paramref name="home"/>, relative to it: <see cref="LoginFiles"/>, and any file a level
+    /// below its login folders whose name says it holds a token or credential. Never through a link; a missing folder has none.
+    /// </summary>
+    internal static IReadOnlyList<string> FindLoginFiles(string home)
+    {
+        var found = new List<string>(LoginFiles);
+        foreach (var folder in LoginFolders)
+        {
+            try
+            {
+                var directory = new DirectoryInfo(Path.Combine(home, folder));
+                if (!directory.Exists || directory.LinkTarget is not null) continue;
+                foreach (var file in directory.EnumerateFiles())
+                {
+                    var relative = $"{folder}/{file.Name}";
+                    if (file.LinkTarget is null && LoginFileName.IsMatch(file.Name) && !found.Contains(relative))
+                        found.Add(relative);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A folder that cannot be listed has no sign-in to find.
+            }
+        }
+        return found;
+    }
 
     /// <summary>Set, the CLI keeps its sign-in in a file instead of the OS keyring, which a run's home and the terminal's have none of.</summary>
     public const string ForceFileTokenStorage = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE";
@@ -257,7 +291,7 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     {
         var storeHome = EnvironmentVariables.Get("HOME") is { Length: > 0 } home ? home : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var found = false;
-        foreach (var relative in LoginFiles)
+        foreach (var relative in FindLoginFiles(storeHome))
         {
             string text;
             try

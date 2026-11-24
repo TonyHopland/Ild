@@ -226,7 +226,7 @@ public class AgyAdapterTests
         var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
         try
         {
-            var token = Path.Combine(home, AgyAdapter.LoginFiles[0]);
+            var token = Path.Combine(home, ".config", "antigravity", "credential-user-scope");
             Directory.CreateDirectory(Path.GetDirectoryName(token)!);
             File.WriteAllText(token, "token");
             var environment = new TestProcessEnvironment { { "HOME", home } };

@@ -43,18 +43,20 @@ public static class CredentialImport
                 text = await reader.ReadToEndAsync(token);
             });
             return text;
-        }, storeHome, logger, ct);
+        }, storeHome, logger, ct, AgyAdapter.FindLoginFiles(throwawayHome));
 
     /// <summary>
     /// Keeps the logins that <paramref name="read"/> finds, given a path relative to the home they were written in. It
     /// returns the file's text, or null for a file that is not there, is not a regular file, or is over <see cref="MaxBytes"/>.
     /// </summary>
     /// <returns>The files imported, relative to the home.</returns>
+    /// <param name="found">Further files, relative to the home, that hold a login in a form that is not known: any non-empty file is kept.</param>
     public static async Task<IReadOnlyList<string>> ImportAsync(
-        Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct)
+        Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct, IEnumerable<string>? found = null)
     {
         var imported = new List<string>();
-        foreach (var login in Logins)
+        var known = Logins.Select(login => login.RelativePath).ToHashSet(StringComparer.Ordinal);
+        foreach (var login in Logins.Concat((found ?? []).Where(path => !known.Contains(path)).Select(path => new Login(path, _ => true, Json: false))))
         {
             try
             {
