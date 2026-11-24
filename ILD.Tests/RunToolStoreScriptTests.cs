@@ -209,6 +209,134 @@ public sealed class RunToolStoreScriptTests : IDisposable
             key = "agy", manifest = "https://releases.example/manifests/{platform}.json", version, bin = "agy", entry = "antigravity",
         });
 
+    private void Uname(string system, string machine)
+    {
+        WriteExecutable("uname", """
+            #!/bin/bash
+            case "$1" in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; esac
+            """);
+        _environment = new Dictionary<string, string>(_environment) { ["FAKE_SYSTEM"] = system, ["FAKE_MACHINE"] = machine };
+    }
+
+    // The same table as ManagedAgentReleaseTests.Platforms_are_named_by_system_architecture_and_c_library, for the script.
+    [Theory]
+    [InlineData("Linux", "x86_64", false, "linux_amd64")]
+    [InlineData("Linux", "aarch64", false, "linux_arm64")]
+    [InlineData("Linux", "x86_64", true, "linux_amd64_musl")]
+    [InlineData("Linux", "arm64", true, "linux_arm64_musl")]
+    [InlineData("Darwin", "arm64", false, "darwin_arm64")]
+    [InlineData("Darwin", "x86_64", true, "darwin_amd64")]
+    public void A_run_host_names_its_platform_by_system_architecture_and_c_library(string system, string machine, bool musl, string expected)
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+        Uname(system, machine);
+        var libc = Directory.CreateDirectory(Path.Combine(_dir, "lib")).FullName;
+        if (musl) File.WriteAllText(Path.Combine(libc, "ld-musl-x86_64.so.1"), "");
+        _environment = new Dictionary<string, string>(_environment) { ["ILD_MUSL_GLOB"] = Path.Combine(libc, "*musl*") };
+
+        var result = Run("release=" + Release());
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal($"https://releases.example/manifests/{expected}.json", File.ReadAllLines(CurlLog)[0]);
+    }
+
+    [Theory]
+    [InlineData("Linux", "riscv64")]
+    [InlineData("FreeBSD", "x86_64")]
+    public void A_run_host_with_no_build_for_it_says_so(string system, string machine)
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+        Uname(system, machine);
+
+        var result = Run("release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("has no build for", result.StdErr);
+        Assert.False(File.Exists(CurlLog));
+    }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public void The_script_unpacks_the_same_file_and_sets_the_same_mode_as_the_install_on_ilds_own_machine()
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+
+        var result = Run("release=" + Release());
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        var unpacked = Directory.EnumerateFiles(Root, "antigravity", SearchOption.AllDirectories).Single();
+        Assert.Equal(ManagedAgentReleaseTests.AgentScript, File.ReadAllText(unpacked));
+        Assert.Equal(ILD.Core.Services.Implementations.ManagedAgentService.ExecutableMode, File.GetUnixFileMode(unpacked));
+    }
+
+    [Fact]
+    public void An_install_that_is_complete_is_used_without_asking_the_release_server_again()
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+        Run("release=" + Release());
+        File.Delete(CurlLog);
+        WriteExecutable("curl", "#!/bin/bash\necho offline >&2\nexit 7");
+
+        var result = Run("release=" + Release());
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal("1.5.16", JsonNode.Parse(result.StdOut.Trim())!["version"]!.GetValue<string>());
+        Assert.DoesNotContain("offline", result.StdErr);
+    }
+
+    [Fact]
+    public void With_the_server_unreachable_the_newest_install_on_the_host_is_used_with_a_warning()
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+        Run("release=" + Release("1.5.16"));
+        WriteExecutable("curl", "#!/bin/bash\nexit 7");
+
+        var result = Run("release=" + Release("1.5.20"));
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal("1.5.16", JsonNode.Parse(result.StdOut.Trim())!["version"]!.GetValue<string>());
+        Assert.Contains("could not read the agy release manifest", result.StdErr);
+        Assert.Contains("the installed agy 1.5.16 is used", result.StdErr);
+    }
+
+    [Fact]
+    public void A_manifest_the_server_offers_the_held_version_of_is_installed_at_that_version()
+    {
+        ServeRelease(ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript), "1.5.16");
+
+        var result = Run("release=" + Release("1.5.16"));
+
+        Assert.DoesNotContain("no longer offered", result.StdErr);
+        Assert.Equal("1.5.16", JsonNode.Parse(result.StdOut.Trim())!["version"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void An_archive_without_the_executable_stops_the_script_and_leaves_the_install_incomplete()
+    {
+        ServeRelease(ReleaseArchive("something-else", "x"), "1.5.16");
+
+        var result = Run("release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("could not unpack antigravity", result.StdErr);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(Root, "agents"), ".ild-complete", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void An_executable_that_is_a_link_in_the_archive_is_not_taken()
+    {
+        var source = Directory.CreateDirectory(Path.Combine(_dir, "link-src")).FullName;
+        File.CreateSymbolicLink(Path.Combine(source, "antigravity"), "/bin/sh");
+        var archive = Path.Combine(_dir, "link.tar.gz");
+        using (var tar = Process.Start(new ProcessStartInfo("tar", ["-czf", archive, "-C", source, "antigravity"]))!) tar.WaitForExit();
+        ServeRelease(archive, "1.5.16");
+
+        var result = Run("release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("has no regular file antigravity", result.StdErr);
+    }
+
     [Fact]
     public void A_release_agent_is_read_from_the_manifest_of_the_run_hosts_own_platform_and_wrapped_without_the_agents_node()
     {
@@ -285,6 +413,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("could not read the agy release manifest", result.StdErr);
+        Assert.Contains("no agy is installed here", result.StdErr);
     }
 
     [Fact]

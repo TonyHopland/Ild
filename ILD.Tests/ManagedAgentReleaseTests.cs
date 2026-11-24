@@ -16,6 +16,9 @@ public class ManagedAgentReleaseTests : IDisposable
 {
     private const string ArchiveUrl = "https://downloads.example/agy-1.5.16.tar.gz";
 
+    /// <summary>What the stand-in archive holds, here and in the installer script's tests: both must unpack the same file.</summary>
+    internal const string AgentScript = "#!/bin/sh\necho agy\n";
+
     private readonly string _dataRoot = Path.Combine(Path.GetTempPath(), "ild-agent-release-" + Guid.NewGuid().ToString("N"));
     private readonly ManagedAgent _agent = ManagedAgentCatalog.Agy;
     private readonly Downloads _downloads = new();
@@ -42,7 +45,7 @@ public class ManagedAgentReleaseTests : IDisposable
 
     private sealed class Downloads : HttpMessageHandler
     {
-        public byte[] Archive { get; set; } = TarGz("antigravity", "#!/bin/sh\necho 1.5.16\n");
+        public byte[] Archive { get; set; } = TarGz("antigravity", AgentScript);
         public string? ManifestVersion { get; set; } = "1.5.16";
         public string? ManifestSha512 { get; set; }
         public HttpStatusCode ManifestStatus { get; set; } = HttpStatusCode.OK;
@@ -75,6 +78,19 @@ public class ManagedAgentReleaseTests : IDisposable
 
     private ManagedAgentService Service(Runner? runner = null)
         => new(new HttpClient(_downloads), runner ?? new Runner(), _dataRoot, logger: null);
+
+    // The same table as the installer script's, in RunToolStoreScriptTests: ILD's own machine and a run host name platforms alike.
+    [Theory]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.X64, false, "linux_amd64")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.Arm64, false, "linux_arm64")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.X64, true, "linux_amd64_musl")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.Arm64, true, "linux_arm64_musl")]
+    [InlineData("darwin", System.Runtime.InteropServices.Architecture.Arm64, false, "darwin_arm64")]
+    [InlineData("darwin", System.Runtime.InteropServices.Architecture.X64, true, "darwin_amd64")]
+    [InlineData("linux", System.Runtime.InteropServices.Architecture.RiscV64, false, null)]
+    [InlineData(null, System.Runtime.InteropServices.Architecture.X64, false, null)]
+    public void Platforms_are_named_by_system_architecture_and_c_library(string? os, System.Runtime.InteropServices.Architecture architecture, bool musl, string? expected)
+        => Assert.Equal(expected, ManagedAgentService.ReleasePlatformName(os, architecture, musl));
 
     [Fact]
     public async Task The_latest_version_is_the_manifests_and_a_missing_install_is_actionable()
@@ -111,8 +127,8 @@ public class ManagedAgentReleaseTests : IDisposable
         var versionId = ManagedAgentInstall.CurrentVersionId(_dataRoot, _agent)!;
         var binary = ManagedAgentInstall.BinaryIn(ManagedAgentInstall.VersionDir(_dataRoot, _agent, versionId), _agent);
         Assert.Equal(binary, ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent));
-        Assert.Equal("#!/bin/sh\necho 1.5.16\n", File.ReadAllText(binary));
-        Assert.True(File.GetUnixFileMode(binary).HasFlag(UnixFileMode.UserExecute));
+        Assert.Equal(AgentScript, File.ReadAllText(binary));
+        Assert.Equal(ManagedAgentService.ExecutableMode, File.GetUnixFileMode(binary));
         Assert.Equal("1.5.16", status.InstalledVersion);
         Assert.False(status.UpdateAvailable);
         Assert.False(File.Exists(Path.Combine(ManagedAgentInstall.VersionDir(_dataRoot, _agent, versionId), "release.tar.gz")));
@@ -148,6 +164,7 @@ public class ManagedAgentReleaseTests : IDisposable
 
         Assert.Contains("1.5.16", failure.Message);
         Assert.Null(ManagedAgentInstall.CurrentVersionId(_dataRoot, _agent));
+        Assert.Empty(Directory.EnumerateDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
     }
 
     [Fact]

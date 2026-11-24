@@ -17,23 +17,32 @@ internal sealed record AgentReleaseManifest(string? Version, string? Url, string
 
 public sealed partial class ManagedAgentService
 {
-    /// <summary>The platform name release manifests are published under, or null on a platform the agent has none for.</summary>
+    /// <summary>The mode the agent's executable has once installed. RunToolStore's installer script sets the same (<c>chmod 0755</c>).</summary>
+    internal const UnixFileMode ExecutableMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+
+    /// <summary>
+    /// The platform name release manifests are published under for ILD's own machine, or null on a platform the agent has none for.
+    /// RunToolStore's installer script names the platform of a run host the same way, with the same musl test (something called
+    /// <c>*musl*</c> directly in <c>/lib</c>); change the two together.
+    /// </summary>
     internal static string? ReleasePlatform()
+        => ReleasePlatformName(
+            OperatingSystem.IsLinux() ? "linux" : OperatingSystem.IsMacOS() ? "darwin" : null,
+            RuntimeInformation.OSArchitecture,
+            IsMusl());
+
+    /// <summary>`{os}_{arch}`, with `_musl` after it on a Linux with musl; null for an operating system or architecture with no build.</summary>
+    internal static string? ReleasePlatformName(string? os, Architecture architecture, bool musl)
     {
-        var architecture = RuntimeInformation.OSArchitecture switch
-        {
-            Architecture.X64 => "amd64",
-            Architecture.Arm64 => "arm64",
-            _ => null,
-        };
-        if (architecture is null) return null;
-        if (OperatingSystem.IsMacOS()) return $"darwin_{architecture}";
-        if (!OperatingSystem.IsLinux()) return null;
-        return IsMusl() ? $"linux_{architecture}_musl" : $"linux_{architecture}";
+        var arch = architecture switch { Architecture.X64 => "amd64", Architecture.Arm64 => "arm64", _ => null };
+        if (os is null || arch is null) return null;
+        return os == "linux" && musl ? $"linux_{arch}_musl" : $"{os}_{arch}";
     }
 
     private static bool IsMusl()
-        => Directory.Exists("/lib") && Directory.EnumerateFiles("/lib", "*musl*").Any();
+        => Directory.Exists("/lib") && Directory.EnumerateFileSystemEntries("/lib", "*musl*").Any();
 
     /// <summary>The manifest URL ILD uses: the environment's, when the release names a variable that is set, else the built-in one.</summary>
     internal string ManifestUrlOf(AgentRelease release)
@@ -93,7 +102,7 @@ public sealed partial class ManagedAgentService
         Directory.CreateDirectory(Path.GetDirectoryName(binary)!);
         await ExtractEntryAsync(archive, release.ArchiveEntry, binary, ct);
         if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            File.SetUnixFileMode(binary, ExecutableMode);
         File.Delete(archive);
 
         File.WriteAllText(
@@ -101,6 +110,8 @@ public sealed partial class ManagedAgentService
             JsonSerializer.Serialize(new { version = published, manifestUrl = ManifestUrlOf(release) }));
     }
 
+    // Takes the one regular file named `entryName` out of the archive. The installer script does the same on a run host
+    // (`tar -xzf … entry`, then checks it is a regular file and `chmod 0755`s it); a test holds the two to the same file and mode.
     private static async Task ExtractEntryAsync(string archive, string entryName, string destination, CancellationToken ct)
     {
         await using var compressed = File.OpenRead(archive);
