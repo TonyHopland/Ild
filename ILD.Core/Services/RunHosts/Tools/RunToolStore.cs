@@ -298,6 +298,8 @@ public static class RunToolStore
           info="$(curl -fsSL "${manifest//\{platform\}/$platform}")" || { echo "ild: could not read the $key release manifest for $platform" >&2; return 1; }
           version="$(jq -r '.version // empty' <<< "$info")"; url="$(jq -r '.url // empty' <<< "$info")"; sha512="$(jq -r '.sha512 // empty' <<< "$info")"
           case "$url" in https://*) ;; *) url="" ;; esac
+          # The version names a folder in the store, so it is only taken as a version number, never as a path.
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || version=""
           if [ -z "$version" ] || [ -z "$url" ] || [ -z "$sha512" ]; then echo "ild: the $key release manifest for $platform is incomplete" >&2; return 1; fi
           [ "$version" = "$want" ] || echo "ild: $key $want is no longer offered; the release server names $version, which is installed instead" >&2
           dir="$root/agents/$key/$version-$platform"

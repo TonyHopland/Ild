@@ -105,8 +105,10 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
             var path = McpConfigPath(_home);
             // Held until the turn ends: the file is put back as it was, which two turns in one shared home would do over each other.
-            _configGate = ConfigGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
-            await _configGate.WaitAsync(ctx.Cancel);
+            // Kept only once it is held: a turn cancelled while it waits must not release what another turn holds.
+            var gate = ConfigGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(ctx.Cancel);
+            _configGate = gate;
             var existing = await adapter.ParseSessionFileAsync(path, reader => reader.ReadToEnd(), ctx.Cancel);
             var merged = MergeMcpConfig(existing, servers);
             await adapter.RunHost.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);

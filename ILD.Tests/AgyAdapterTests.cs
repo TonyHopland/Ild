@@ -299,6 +299,50 @@ public class AgyAdapterTests
     }
 
     [Fact]
+    public async Task A_turn_cancelled_while_it_waits_for_the_mcp_config_does_not_let_the_next_one_in_early()
+    {
+        var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
+        try
+        {
+            var log = Path.Combine(home, "turns.log");
+            string Turn(string name, int seconds) => $"echo 'start {name}' >> '{log}'\nsleep {seconds}\necho 'end {name}' >> '{log}'\n" + SuccessTurn;
+            using var holder = new PromptCapturingCli(turn: Turn("a", 3));
+            using var cancelled = new PromptCapturingCli(turn: Turn("b", 0));
+            using var later = new PromptCapturingCli(turn: Turn("c", 0));
+            AgentExecutionContext WithServer(PromptCapturingCli cli, CancellationToken cancel) => Context(cli) with
+            {
+                Cancel = cancel,
+                Provider = new AiProvider
+                {
+                    Name = "agy-test", Type = "agy",
+                    Config = JsonSerializer.Serialize(new Dictionary<string, string>
+                    {
+                        ["binaryPath"] = cli.BinaryPath,
+                        ["customMcpServersJson"] = """{"docs":{"command":"npx"}}""",
+                    }),
+                },
+            };
+            var environment = new TestProcessEnvironment { { "HOME", home } };
+            using var cancel = new CancellationTokenSource();
+
+            var first = new AgyAdapter(environment: environment).ExecuteAsync(WithServer(holder, CancellationToken.None));
+            await Task.Delay(1000, TestContext.Current.CancellationToken);
+            var second = new AgyAdapter(environment: environment).ExecuteAsync(WithServer(cancelled, cancel.Token));
+            await Task.Delay(500, TestContext.Current.CancellationToken);
+            await cancel.CancelAsync();
+            await second;
+            var third = new AgyAdapter(environment: environment).ExecuteAsync(WithServer(later, CancellationToken.None));
+            await Task.WhenAll(first, third);
+
+            Assert.Equal(["start a", "end a", "start c", "end c"], File.ReadAllLines(log));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Turns_in_one_shared_home_that_write_the_mcp_config_take_turns_and_leave_it_as_it_was()
     {
         var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;

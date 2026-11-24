@@ -257,6 +257,25 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(Path.Combine(Root, "agents", "agy"), ".ild-complete", SearchOption.AllDirectories));
     }
 
+    [Theory]
+    [InlineData("../../x")]
+    [InlineData("1.5.16/../../x")]
+    [InlineData("1.5.16 ")]
+    [InlineData("latest")]
+    [InlineData("")]
+    public void A_manifest_version_that_is_not_a_version_number_is_refused_before_anything_is_written(string version)
+    {
+        ServeRelease(ReleaseArchive("antigravity", "#!/bin/sh\n"), version);
+
+        var result = Run("release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("release manifest", result.StdErr);
+        Assert.Contains("incomplete", result.StdErr);
+        Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(Root, "agents")));
+        Assert.False(File.Exists(Path.Combine(_dir, "x")));
+    }
+
     [Fact]
     public void A_manifest_that_cannot_be_read_stops_the_script_with_a_clear_message()
     {
