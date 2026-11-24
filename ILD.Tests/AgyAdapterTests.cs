@@ -241,4 +241,29 @@ public class AgyAdapterTests
             Directory.Delete(home, recursive: true);
         }
     }
+
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public void A_sign_in_folder_that_cannot_be_listed_is_logged_not_taken_for_an_empty_one()
+    {
+        Assert.SkipWhen(Environment.UserName == "root", "root can list any folder");
+        var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
+        var folder = Path.Combine(home, ".config", "antigravity");
+        Directory.CreateDirectory(folder);
+        File.SetUnixFileMode(folder, UnixFileMode.None);
+        var log = new ListLogger<AgyAdapterTests>();
+        try
+        {
+            var found = AgyAdapter.FindLoginFiles(home, log);
+
+            Assert.DoesNotContain(found, file => file.StartsWith(".config/", StringComparison.Ordinal));
+            var warning = Assert.Single(log.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+            Assert.Contains(".config/antigravity", warning.Message);
+        }
+        finally
+        {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(home, recursive: true);
+        }
+    }
 }

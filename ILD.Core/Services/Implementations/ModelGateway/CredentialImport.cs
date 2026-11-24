@@ -43,7 +43,7 @@ public static class CredentialImport
                 text = await reader.ReadToEndAsync(token);
             });
             return text;
-        }, storeHome, logger, ct, AgyAdapter.FindLoginFiles(throwawayHome));
+        }, storeHome, logger, ct, AgyAdapter.FindLoginFiles(throwawayHome, logger));
 
     /// <summary>
     /// Keeps the logins that <paramref name="read"/> finds, given a path relative to the home they were written in. It

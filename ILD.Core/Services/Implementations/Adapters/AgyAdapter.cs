@@ -72,9 +72,9 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// The sign-in files the CLI left in <paramref name="home"/>, relative to it: <see cref="LoginFiles"/>, and any file a level
-    /// below its login folders whose name says it holds a token or credential. Never through a link; a missing folder has none.
+    /// below its login folders whose name says it holds a token or credential. Never through a link; a missing folder has none, and one that cannot be listed is logged.
     /// </summary>
-    internal static IReadOnlyList<string> FindLoginFiles(string home)
+    internal static IReadOnlyList<string> FindLoginFiles(string home, ILogger logger)
     {
         var found = new List<string>(LoginFiles);
         foreach (var folder in LoginFolders)
@@ -92,7 +92,7 @@ public sealed class AgyAdapter : CliAgentAdapterBase
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // A folder that cannot be listed has no sign-in to find.
+                logger.LogWarning(ex, "Could not list the Antigravity sign-in folder {Folder}, so any sign-in in it is not found: {Reason}", folder, ex.Message);
             }
         }
         return found;
@@ -291,7 +291,7 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     {
         var storeHome = EnvironmentVariables.Get("HOME") is { Length: > 0 } home ? home : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var found = false;
-        foreach (var relative in FindLoginFiles(storeHome))
+        foreach (var relative in FindLoginFiles(storeHome, _logger))
         {
             string text;
             try
