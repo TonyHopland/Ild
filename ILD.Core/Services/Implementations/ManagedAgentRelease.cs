@@ -11,7 +11,8 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>The newest build a release manifest names and where to fetch it.</summary>
 /// <param name="Version">The version the manifest names, or null when it names none.</param>
 /// <param name="Url">The <c>.tar.gz</c> archive's address.</param>
-/// <param name="Sha512">The archive's SHA-512 as lowercase hex.</param>
+/// <param name="Sha512">The archive's SHA-512 as lowercase hex. It is an integrity check only: the manifest and the archive come from
+/// the same server, so it catches a damaged download and says nothing about who published it.</param>
 internal sealed record AgentReleaseManifest(string? Version, string? Url, string? Sha512);
 
 public sealed partial class ManagedAgentService
@@ -34,11 +35,15 @@ public sealed partial class ManagedAgentService
     private static bool IsMusl()
         => Directory.Exists("/lib") && Directory.EnumerateFiles("/lib", "*musl*").Any();
 
+    /// <summary>The manifest URL ILD uses: the environment's, when the release names a variable that is set, else the built-in one.</summary>
+    internal string ManifestUrlOf(AgentRelease release)
+        => release.ManifestUrlVariable is { } variable && _environment.Get(variable) is { Length: > 0 } configured ? configured : release.ManifestUrl;
+
     private async Task<AgentReleaseManifest> ReadReleaseManifestAsync(AgentRelease release, CancellationToken ct)
     {
         var platform = ReleasePlatform()
             ?? throw new InvalidOperationException("This platform has no published build of the agent.");
-        using var doc = await _http.GetFromJsonAsync<JsonDocument>(release.ManifestUrl.Replace("{platform}", platform), ct);
+        using var doc = await _http.GetFromJsonAsync<JsonDocument>(ManifestUrlOf(release).Replace("{platform}", platform), ct);
         var root = doc?.RootElement;
         string? Text(string name)
             => root is { ValueKind: JsonValueKind.Object } element && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
@@ -48,9 +53,11 @@ public sealed partial class ManagedAgentService
     }
 
     /// <summary>
-    /// Downloads the release into <paramref name="versionDir"/>: the archive is checked against the manifest's
-    /// SHA-512 while it streams to disk, then its one executable is taken out as <c>bin/&lt;binary&gt;</c> and the
-    /// version is recorded beside it. A manifest only ever names the newest build, so an exact
+    /// Downloads the release into <paramref name="versionDir"/> for the platform ILD runs on, which is where ILD's own terminals and
+    /// local runs start it: the archive is checked against the manifest's SHA-512 while it streams to disk, then its one executable
+    /// is taken out as <c>bin/&lt;binary&gt;</c> and the version and manifest address are recorded beside it. A run in a container or
+    /// pod of its own does not use this copy: <see cref="ILD.Core.Services.RunHosts.Tools.RunToolStore"/> installs the release there
+    /// with a script of its own, in the installer container, for the platform of that machine. A manifest only ever names the newest build, so an exact
     /// <paramref name="version"/> other than that one cannot be installed.
     /// </summary>
     private async Task InstallReleaseAsync(ManagedAgent agent, AgentRelease release, string version, string versionDir, CancellationToken ct)
@@ -91,7 +98,7 @@ public sealed partial class ManagedAgentService
 
         File.WriteAllText(
             ManagedAgentInstall.ReleaseRecordIn(versionDir),
-            JsonSerializer.Serialize(new { version = published, url, sha512, archiveEntry = release.ArchiveEntry }));
+            JsonSerializer.Serialize(new { version = published, manifestUrl = ManifestUrlOf(release) }));
     }
 
     private static async Task ExtractEntryAsync(string archive, string entryName, string destination, CancellationToken ct)

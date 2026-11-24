@@ -394,10 +394,10 @@ public sealed class RunToolchainTests : IDisposable
         Assert.Equal(["agentnode=node@24", "tool=dotnet@10", "agent=codex|@openai/codex|0.167.0|codex"], arguments);
         Assert.Empty(RunToolStore.Arguments([], []));
         Assert.Equal(
-            ["tool=go@1.23", "agent=agy|https://downloads.example/agy.tar.gz|1.5.16|agy|abc|antigravity"],
+            ["tool=go@1.23", """release={"key":"agy","manifest":"https://releases.example/m/{platform}.json?a=1|2","version":"1.5.16","bin":"agy","entry":"antigravity"}"""],
             RunToolStore.Arguments(
                 [new RunTool("go", "1.23")],
-                [new RunAgent(ManagedAgentCatalog.Agy, "1.5.16", new RunAgentArchive("https://downloads.example/agy.tar.gz", "abc"))]));
+                [new RunAgent(ManagedAgentCatalog.Agy, "1.5.16", "https://releases.example/m/{platform}.json?a=1|2")]));
         Assert.Equal(["tool=go@1.23"], RunToolStore.Arguments([new RunTool("go", "1.23")], []));
     }
 

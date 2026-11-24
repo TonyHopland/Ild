@@ -27,9 +27,10 @@ public sealed record ManagedAgent(
 /// Where an agent shipped as a binary is downloaded from: a JSON manifest per platform that names the latest
 /// <c>version</c>, the archive's <c>url</c> and its <c>sha512</c>.
 /// </summary>
-/// <param name="ManifestUrl">The manifest's URL, with <c>{platform}</c> standing for the platform name (<c>linux_amd64</c>, <c>darwin_arm64</c>).</param>
+/// <param name="ManifestUrl">The manifest's URL, with <c>{platform}</c> standing for the platform name (<c>linux_amd64</c>, <c>darwin_arm64</c>, <c>linux_arm64_musl</c>).</param>
 /// <param name="ArchiveEntry">The executable's name inside the <c>.tar.gz</c> archive.</param>
-public sealed record AgentRelease(string ManifestUrl, string ArchiveEntry);
+/// <param name="ManifestUrlVariable">The environment variable that replaces <paramref name="ManifestUrl"/> when set.</param>
+public sealed record AgentRelease(string ManifestUrl, string ArchiveEntry, string? ManifestUrlVariable = null);
 
 /// <summary>
 /// The set of coding agents ILD manages. Pi, OpenCode, Claude Code, GitHub Copilot and
@@ -57,7 +58,8 @@ public static class ManagedAgentCatalog
 
     public static readonly ManagedAgent Agy =
         new("agy", "Antigravity CLI", null, "agy", "agy",
-            new AgentRelease("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json", "antigravity"));
+            new AgentRelease(
+                "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json", "antigravity", "ILD_AGY_RELEASE_MANIFEST_URL"));
 
     public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode, Copilot, Codex, Agy];
 

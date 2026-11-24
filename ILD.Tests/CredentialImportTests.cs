@@ -1,4 +1,3 @@
-using ILD.Core.Services.Implementations.Adapters;
 using ILD.Api.Services;
 using ILD.Core.Services.Implementations.ModelGateway;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,26 +41,35 @@ public sealed class CredentialImportTests : IDisposable
     [Fact]
     public async Task An_antigravity_sign_in_is_its_token_file_and_the_account_file()
     {
-        Put(Throwaway, AgyAdapter.TokenFile, """{"token":"t","auth_method":"oauth","id_token_email":"me@example.com"}""");
-        Put(Throwaway, AgyAdapter.ScopeFile, "ue3db121817ced2c0");
+        Put(Throwaway, AgyLogin.TokenFile, """{"token":"t","auth_method":"oauth","id_token_email":"me@example.com"}""");
+        Put(Throwaway, AgyLogin.ScopeFile, "ue3db121817ced2c0");
         Put(Throwaway, ".config/antigravity/plugin-secrets.json", "{}");
         Put(Throwaway, ".gemini/antigravity-cli/installation_id", "id");
 
         var imported = await ImportAsync();
 
-        Assert.Equal([AgyAdapter.TokenFile, AgyAdapter.ScopeFile], imported);
-        Assert.Contains("\"token\"", File.ReadAllText(Path.Combine(Store, AgyAdapter.TokenFile)));
+        Assert.Equal([AgyLogin.TokenFile, AgyLogin.ScopeFile], imported);
+        Assert.Contains("\"token\"", File.ReadAllText(Path.Combine(Store, AgyLogin.TokenFile)));
         Assert.False(File.Exists(Path.Combine(Store, ".config", "antigravity", "plugin-secrets.json")));
+    }
+
+    [Fact]
+    public async Task An_antigravity_account_file_alone_is_not_a_login()
+    {
+        Put(Throwaway, AgyLogin.ScopeFile, "ue3db121817ced2c0");
+
+        Assert.Empty(await ImportAsync());
+        Assert.False(File.Exists(Path.Combine(Store, AgyLogin.ScopeFile)));
     }
 
     [Fact]
     public async Task An_antigravity_token_file_without_a_token_does_not_replace_the_one_in_the_store()
     {
-        Put(Store, AgyAdapter.TokenFile, """{"token":"keep"}""");
-        Put(Throwaway, AgyAdapter.TokenFile, "{}");
+        Put(Store, AgyLogin.TokenFile, """{"token":"keep"}""");
+        Put(Throwaway, AgyLogin.TokenFile, "{}");
 
-        Assert.DoesNotContain(AgyAdapter.TokenFile, await ImportAsync());
-        Assert.Contains("keep", File.ReadAllText(Path.Combine(Store, AgyAdapter.TokenFile)));
+        Assert.DoesNotContain(AgyLogin.TokenFile, await ImportAsync());
+        Assert.Contains("keep", File.ReadAllText(Path.Combine(Store, AgyLogin.TokenFile)));
     }
 
     [Fact]
@@ -115,7 +123,8 @@ public sealed class CredentialImportTests : IDisposable
         }, Store, NullLogger.Instance, TestContext.Current.CancellationToken);
 
         Assert.Equal([".claude/.credentials.json"], imported);
-        Assert.Equal(5 + AgyAdapter.LoginFiles.Length, asked.Count);
+        // The account file is only asked for once its token was found.
+        Assert.Equal(5 + 1, asked.Count);
         Assert.True(File.Exists(Path.Combine(Store, ".claude", ".credentials.json")));
         Assert.False(File.Exists(Path.Combine(Store, ".codex", "auth.json")));
     }

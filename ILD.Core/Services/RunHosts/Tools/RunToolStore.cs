@@ -160,10 +160,10 @@ public static class RunToolStore
     public static IReadOnlyList<string> Arguments(IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents)
     {
         var arguments = new List<string>();
-        if (agents.Any(a => a.Archive is null)) arguments.Add($"agentnode={AgentNode}");
+        if (agents.Any(a => a.ReleaseManifest is null)) arguments.Add($"agentnode={AgentNode}");
         arguments.AddRange(tools.Select(t => $"tool={t}"));
-        arguments.AddRange(agents.Select(a => a.Archive is { } archive
-            ? $"agent={a.Agent.Key}|{archive.Url}|{a.Version}|{a.Agent.BinaryName}|{archive.Sha512}|{a.Agent.Release!.ArchiveEntry}"
+        arguments.AddRange(agents.Select(a => a.ReleaseManifest is { } manifest
+            ? "release=" + JsonSerializer.Serialize(new { key = a.Agent.Key, manifest, version = a.Version, bin = a.Agent.BinaryName, entry = a.Agent.Release!.ArchiveEntry })
             : $"agent={a.Agent.Key}|{a.Agent.NpmPackage}|{a.Version}|{a.Agent.BinaryName}"));
         return arguments;
     }
@@ -256,36 +256,62 @@ public static class RunToolStore
           fi
         }
 
-        # Installs an agent CLI once, at an exact version, with a wrapper that starts it on the agents' Node, or, for an
-        # agent shipped as a release archive (its address in place of the package), a wrapper that starts the binary.
+        # Installs an agent CLI once, at an exact version, with a wrapper that starts it on the agents' Node.
         ensure_agent() {
-          local key="$1" package="$2" version="$3" bin="$4" sha512="${5:-}" entry="${6:-}" dir target
+          local key="$1" package="$2" version="$3" bin="$4" dir target
           dir="$root/agents/$key/$version"
           if [ ! -e "$dir/.ild-complete" ]; then
             mkdir -p "$root/agents/$key"
             exec 9>"$root/agents/$key/$version.lock"; flock 9
             if [ ! -e "$dir/.ild-complete" ]; then
               rm -rf "$dir"; mkdir -p "$dir/wrap"
-              if [ -n "$sha512" ]; then
-                mkdir -p "$dir/release"
-                curl -fsSL -o "$dir/release.tar.gz" "$package" >&2
-                printf '%s  %s\n' "$sha512" "$dir/release.tar.gz" | sha512sum -c - >&2
-                tar -xzf "$dir/release.tar.gz" -C "$dir/release" "$entry" >&2
-                rm -f "$dir/release.tar.gz"
-                target="$dir/release/$entry"
-                chmod 0755 "$target"
-              else
-                # npm runs only the install scripts its package.json approves: the agent's own, nothing it depends on.
-                printf '{"allowScripts":{"%s":true}}' "$package" > "$dir/package.json"
-                (cd "$dir" && PATH="$agent_node:$base_path" npm install "$package@$version" --prefix "$dir" \
-                  --ignore-scripts=false --no-audit --no-fund --no-package-lock) >&2
-                target="$(readlink -f "$dir/node_modules/.bin/$bin")"
-              fi
-              if [ -z "$sha512" ] && head -n1 "$target" | grep -q '^#!.*node'; then
+              # npm runs only the install scripts its package.json approves: the agent's own, nothing it depends on.
+              printf '{"allowScripts":{"%s":true}}' "$package" > "$dir/package.json"
+              (cd "$dir" && PATH="$agent_node:$base_path" npm install "$package@$version" --prefix "$dir" \
+                --ignore-scripts=false --no-audit --no-fund --no-package-lock) >&2
+              target="$(readlink -f "$dir/node_modules/.bin/$bin")"
+              if head -n1 "$target" | grep -q '^#!.*node'; then
                 printf '#!/bin/sh\nexec "%s/node" "%s" "$@"\n' "$agent_node" "$target" > "$dir/wrap/$bin"
               else
                 printf '#!/bin/sh\nexec "%s" "$@"\n' "$target" > "$dir/wrap/$bin"
               fi
+              chmod 0755 "$dir/wrap/$bin"
+              touch "$dir/.ild-complete"
+            fi
+            exec 9>&-
+          fi
+          jq -cn --arg key "$key" --arg version "$version" --arg wrap "$dir/wrap" '{kind: "agent", key: $key, version: $version, path: [$wrap]}'
+        }
+
+        # Installs an agent shipped as a release archive. The manifest is read here, so the build is the one for this machine's
+        # platform (architecture, and musl or glibc), whichever machine ILD itself is. A manifest names only the newest build:
+        # when that is not the version ILD holds, the newer one is installed, and said so.
+        ensure_release_agent() {
+          local key="$1" manifest="$2" want="$3" bin="$4" entry="$5" tool os arch platform info version url sha512 dir
+          for tool in curl sha512sum tar; do
+            command -v "$tool" >/dev/null || { echo "ild: $tool is needed to install $key and is not on this machine" >&2; return 1; }
+          done
+          case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "ild: $key has no build for $(uname -s)" >&2; return 1 ;; esac
+          case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "ild: $key has no build for $(uname -m)" >&2; return 1 ;; esac
+          platform="${os}_${arch}"
+          if [ "$os" = linux ] && compgen -G '/lib/*musl*' >/dev/null; then platform="${platform}_musl"; fi
+          info="$(curl -fsSL "${manifest//\{platform\}/$platform}")" || { echo "ild: could not read the $key release manifest for $platform" >&2; return 1; }
+          version="$(jq -r '.version // empty' <<< "$info")"; url="$(jq -r '.url // empty' <<< "$info")"; sha512="$(jq -r '.sha512 // empty' <<< "$info")"
+          case "$url" in https://*) ;; *) url="" ;; esac
+          if [ -z "$version" ] || [ -z "$url" ] || [ -z "$sha512" ]; then echo "ild: the $key release manifest for $platform is incomplete" >&2; return 1; fi
+          [ "$version" = "$want" ] || echo "ild: $key $want is no longer offered; the release server names $version, which is installed instead" >&2
+          dir="$root/agents/$key/$version-$platform"
+          if [ ! -e "$dir/.ild-complete" ]; then
+            mkdir -p "$root/agents/$key"
+            exec 9>"$root/agents/$key/$version-$platform.lock"; flock 9
+            if [ ! -e "$dir/.ild-complete" ]; then
+              rm -rf "$dir"; mkdir -p "$dir/wrap" "$dir/release"
+              curl -fsSL -o "$dir/release.tar.gz" "$url" >&2 || { echo "ild: could not download $key $version from $url" >&2; return 1; }
+              printf '%s  %s\n' "$sha512" "$dir/release.tar.gz" | sha512sum -c - >&2 || { echo "ild: the downloaded $key archive does not match its manifest's checksum" >&2; return 1; }
+              tar -xzf "$dir/release.tar.gz" -C "$dir/release" "$entry" >&2
+              rm -f "$dir/release.tar.gz"
+              chmod 0755 "$dir/release/$entry"
+              printf '#!/bin/sh\nexec "%s" "$@"\n' "$dir/release/$entry" > "$dir/wrap/$bin"
               chmod 0755 "$dir/wrap/$bin"
               touch "$dir/.ild-complete"
             fi
@@ -299,7 +325,11 @@ public static class RunToolStore
           case "$arg" in
             agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")"; jq -c '. + {kind: "agentnode"}' "$(manifest_for "$spec")" ;;
             tool=*) spec="${arg#tool=}"; ensure_tool "$spec"; jq -c '. + {kind: "tool"}' "$(manifest_for "$spec")" ;;
-            agent=*) IFS='|' read -r key package version bin sha512 entry <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" "$sha512" "$entry" ;;
+            agent=*) IFS='|' read -r key package version bin <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" ;;
+            release=*)
+              release="${arg#release=}"
+              ensure_release_agent "$(jq -r .key <<< "$release")" "$(jq -r .manifest <<< "$release")" "$(jq -r .version <<< "$release")" \
+                "$(jq -r .bin <<< "$release")" "$(jq -r .entry <<< "$release")" ;;
           esac
         done
         """;

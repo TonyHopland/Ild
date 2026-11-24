@@ -188,12 +188,22 @@ public sealed partial class ModelGatewayMiddleware
         var builder = new UriBuilder(root.Scheme, root.Host, root.Port)
         {
             Path = expectedPath,
-            Query = query.HasValue ? query.Value![1..] : string.Empty,
+            Query = route == GatewayRoutes.Google ? WithoutKeyParameter(query) : query.HasValue ? query.Value![1..] : string.Empty,
         };
         target = builder.Uri;
         return string.Equals(target.Host, root.Host, StringComparison.OrdinalIgnoreCase)
             && target.Port == root.Port && target.Scheme == root.Scheme
             && string.Equals(target.AbsolutePath, expectedPath, StringComparison.Ordinal);
+    }
+
+    // The Gemini API also takes its key as ?key=; an agent that sent its placeholder there must not send it on, and the real key
+    // goes in the header, so the parameter is dropped whatever it holds.
+    private static string WithoutKeyParameter(QueryString query)
+    {
+        if (!query.HasValue) return string.Empty;
+        var kept = query.Value![1..].Split('&').Where(pair =>
+            !string.Equals(Uri.UnescapeDataString(pair.Split('=', 2)[0]), "key", StringComparison.OrdinalIgnoreCase));
+        return string.Join('&', kept.Where(pair => pair.Length > 0));
     }
 
     // What each agent CLI calls on its route. An entry ending in '/' is a prefix; any other is the exact path.

@@ -26,6 +26,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     private readonly ILogger<ManagedAgentService>? _logger;
     private readonly string _dataRoot;
     private readonly IManagedAgentUsage? _usage;
+    private readonly IProcessEnvironment _environment;
     private readonly AutoInstallForecast? _forecast;
 
     // One in-flight update per agent, shared across every instance: the typed
@@ -41,8 +42,9 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         IProcessRunner runner,
         ILogger<ManagedAgentService>? logger = null,
         IManagedAgentUsage? usage = null,
-        AutoInstallForecast? forecast = null)
-        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger, usage, forecast)
+        AutoInstallForecast? forecast = null,
+        IProcessEnvironment? environment = null)
+        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(environment), logger, usage, forecast, environment)
     {
     }
 
@@ -53,8 +55,10 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         string dataRoot,
         ILogger<ManagedAgentService>? logger = null,
         IManagedAgentUsage? usage = null,
-        AutoInstallForecast? forecast = null)
+        AutoInstallForecast? forecast = null,
+        IProcessEnvironment? environment = null)
     {
+        _environment = environment ?? ProcessEnvironment.Current;
         _http = http;
         _runner = runner;
         _logger = logger;

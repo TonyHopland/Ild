@@ -328,6 +328,32 @@ public class ModelGatewayTests : IAsyncLifetime
             new Uri("https://" + GatewayRoutes.GoogleHost), GatewayRoutes.Google, rest, default, out _, out _));
     }
 
+    [Theory]
+    [InlineData("?key=ildgw_placeholder&alt=sse", "?alt=sse")]
+    [InlineData("?alt=sse&KEY=ildgw_placeholder", "?alt=sse")]
+    [InlineData("?%6bey=ildgw_placeholder", "")]
+    [InlineData("?alt=sse&key=a&pageSize=1000&key=b", "?alt=sse&pageSize=1000")]
+    [InlineData("?alt=sse&keys=1&monkey=2", "?alt=sse&keys=1&monkey=2")]
+    [InlineData("", "")]
+    public void A_gemini_key_in_the_query_is_dropped_and_the_other_parameters_are_kept(string query, string expected)
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://" + GatewayRoutes.GoogleHost), GatewayRoutes.Google, "v1beta/models/m:streamGenerateContent",
+            new QueryString(query), out var target, out _));
+
+        Assert.Equal(expected, target.Query);
+        Assert.DoesNotContain("placeholder", target.ToString());
+    }
+
+    [Fact]
+    public void Other_routes_keep_a_key_parameter_in_the_query()
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://example.test/base"), GatewayRoutes.Upstream, "models", new QueryString("?key=1"), out var target, out _));
+
+        Assert.Equal("?key=1", target.Query);
+    }
+
     [Fact]
     public async Task A_gemini_request_carries_the_real_key_in_the_gemini_header_and_no_bearer()
     {

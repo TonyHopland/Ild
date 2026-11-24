@@ -167,17 +167,48 @@ public class ManagedAgentReleaseTests : IDisposable
     }
 
     [Fact]
-    public async Task A_run_in_its_own_container_is_given_the_archive_and_its_checksum()
+    public async Task A_run_in_its_own_container_is_given_the_manifest_to_read_for_its_own_platform()
     {
         await Service().UpdateAsync("agy", TestContext.Current.CancellationToken);
 
         var installed = Assert.Single(RunAgent.Installed(_dataRoot));
 
         Assert.Equal("1.5.16", installed.Version);
-        Assert.Equal(ArchiveUrl, installed.Archive!.Url);
-        Assert.Equal(Convert.ToHexStringLower(SHA512.HashData(_downloads.Archive)), installed.Archive.Sha512);
-        Assert.Equal(
-            [$"agent=agy|{ArchiveUrl}|1.5.16|agy|{installed.Archive.Sha512}|antigravity"],
-            RunToolStore.Arguments([], [installed]));
+        Assert.Equal(ManagedAgentCatalog.Agy.Release!.ManifestUrl, installed.ReleaseManifest);
+        var argument = Assert.Single(RunToolStore.Arguments([], [installed]));
+        Assert.StartsWith("release={\"key\":\"agy\",\"manifest\":", argument);
+        Assert.Contains("{platform}", argument);
+        Assert.DoesNotContain(ArchiveUrl, argument);
+    }
+
+    [Fact]
+    public async Task The_manifest_address_can_be_set_in_the_environment_and_is_the_one_a_run_is_given()
+    {
+        var environment = new TestProcessEnvironment { { "ILD_AGY_RELEASE_MANIFEST_URL", "https://mirror.example/agy/{platform}.json" } };
+        var service = new ManagedAgentService(new HttpClient(_downloads), new Runner(), _dataRoot, logger: null, environment: environment);
+
+        await service.UpdateAsync("agy", TestContext.Current.CancellationToken);
+
+        Assert.All(_downloads.Requests.Where(url => url.EndsWith(".json", StringComparison.Ordinal)), url => Assert.StartsWith("https://mirror.example/agy/", url));
+        Assert.Equal("https://mirror.example/agy/{platform}.json", Assert.Single(RunAgent.Installed(_dataRoot)).ReleaseManifest);
+    }
+
+    [Fact]
+    public async Task Rolling_back_switches_to_the_kept_install_without_going_to_the_release_server()
+    {
+        var service = Service();
+        await service.UpdateAsync("agy", TestContext.Current.CancellationToken);
+        _downloads.ManifestVersion = "1.6.0";
+        await service.UpdateAsync("agy", TestContext.Current.CancellationToken);
+        var requests = _downloads.Requests.Count;
+
+        var status = await service.RollbackAsync("agy", "1.5.16", TestContext.Current.CancellationToken);
+
+        Assert.Equal("1.5.16", Assert.Single(RunAgent.Installed(_dataRoot)).Version);
+        Assert.Equal("1.6.0", status.HeldVersion);
+        Assert.Null(status.PreviousVersion);
+        // Only the status check's own look at the manifest: the rollback itself downloads nothing.
+        Assert.Equal(requests + 1, _downloads.Requests.Count);
+        Assert.Null(await service.GetAutoUpdatePlanAsync("agy", TimeSpan.Zero, DateTimeOffset.UtcNow, TestContext.Current.CancellationToken));
     }
 }

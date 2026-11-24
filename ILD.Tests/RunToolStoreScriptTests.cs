@@ -82,12 +82,14 @@ public sealed class RunToolStoreScriptTests : IDisposable
     private string? _sdk;
     private IReadOnlyDictionary<string, string> _environment = new Dictionary<string, string>();
 
-    private (int ExitCode, string StdOut, string StdErr) Run(params string[] arguments)
+    private (int ExitCode, string StdOut, string StdErr) Run(params string[] arguments) => RunWithPath(null, arguments);
+
+    private (int ExitCode, string StdOut, string StdErr) RunWithPath(string? onlyPath, params string[] arguments)
     {
         Assert.SkipUnless(OperatingSystem.IsLinux() && Has("jq") && Has("flock"), "needs Linux with bash, jq and flock");
         var psi = new ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var a in new[] { "-c", RunToolStore.InstallScript.Replace("\r\n", "\n"), "bash" }.Concat(arguments)) psi.ArgumentList.Add(a);
-        psi.Environment["PATH"] = $"{Bin}:{Environment.GetEnvironmentVariable("PATH")}";
+        psi.Environment["PATH"] = onlyPath ?? $"{Bin}:{Environment.GetEnvironmentVariable("PATH")}";
         psi.Environment["ILD_TOOLS_ROOT"] = Root;
         psi.Environment["MISE_DATA_DIR"] = Path.Combine(Root, "mise");
         psi.Environment["FAKE_LOG"] = Log;
@@ -162,6 +164,10 @@ public sealed class RunToolStoreScriptTests : IDisposable
         var wrapper = File.ReadAllText(Path.Combine(wrap, "pi"));
         Assert.Contains($"exec \"{Root}/mise/installs/node/24.0/bin/node\" \"{Root}/agents/pi/1.5.0/node_modules/pkg/cli.js\"", wrapper);
     }
+    // -- A release agent: the run host reads the manifest for its own platform --------------------------------------------
+
+    private const string ReleaseUrl = "https://downloads.example/agy.tar.gz";
+
     private string ReleaseArchive(string entry, string content)
     {
         var source = Directory.CreateDirectory(Path.Combine(_dir, "release-src")).FullName;
@@ -172,37 +178,110 @@ public sealed class RunToolStoreScriptTests : IDisposable
         return archive;
     }
 
-    [Fact]
-    public void A_release_agent_is_downloaded_checked_against_its_checksum_and_wrapped_without_the_agents_node()
-    {
-        var archive = ReleaseArchive("antigravity", "#!/bin/sh\necho agy\n");
-        var sha512 = Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(File.ReadAllBytes(archive)));
-        var argument = $"agent=agy|file://{archive}|1.5.16|agy|{sha512}|antigravity";
+    private string CurlLog => Path.Combine(_dir, "curl.log");
 
-        var first = Run(argument);
-        var second = Run(argument);
+    /// <summary>A curl that answers the manifest and the archive from files, and logs each address it is asked for.</summary>
+    private void ServeRelease(string archive, string version, string? sha512 = null)
+    {
+        var manifest = Path.Combine(_dir, "manifest.json");
+        sha512 ??= Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(File.ReadAllBytes(archive)));
+        File.WriteAllText(manifest, $$"""{"version":"{{version}}","url":"{{ReleaseUrl}}","sha512":"{{sha512}}"}""");
+        WriteExecutable("curl", """
+            #!/bin/bash
+            out=""; url=""
+            while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done
+            echo "$url" >> "$FAKE_CURL_LOG"
+            case "$url" in
+              */manifests/*.json) cat "$FAKE_MANIFEST" ;;
+              *agy.tar.gz) cp "$FAKE_ARCHIVE" "$out" ;;
+              *) exit 22 ;;
+            esac
+            """);
+        _environment = new Dictionary<string, string>(_environment)
+        {
+            ["FAKE_CURL_LOG"] = CurlLog, ["FAKE_MANIFEST"] = manifest, ["FAKE_ARCHIVE"] = archive,
+        };
+    }
+
+    private static string Release(string version = "1.5.16")
+        => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            key = "agy", manifest = "https://releases.example/manifests/{platform}.json", version, bin = "agy", entry = "antigravity",
+        });
+
+    [Fact]
+    public void A_release_agent_is_read_from_the_manifest_of_the_run_hosts_own_platform_and_wrapped_without_the_agents_node()
+    {
+        ServeRelease(ReleaseArchive("antigravity", "#!/bin/sh\necho agy\n"), "1.5.16");
+
+        var first = Run("release=" + Release());
+        var second = Run("release=" + Release());
 
         Assert.True(first.ExitCode == 0, first.StdErr);
         Assert.Equal(first.StdOut, second.StdOut);
+        var requested = File.ReadAllLines(CurlLog)[0];
+        Assert.Matches(@"^https://releases\.example/manifests/(linux_(amd64|arm64)(_musl)?|darwin_(amd64|arm64))\.json$", requested);
+        var platform = requested["https://releases.example/manifests/".Length..^".json".Length];
         var line = JsonNode.Parse(first.StdOut.Trim())!;
         Assert.Equal("agent", line["kind"]!.GetValue<string>());
-        var wrap = Path.Combine(Root, "agents", "agy", "1.5.16", "wrap");
+        Assert.Equal("1.5.16", line["version"]!.GetValue<string>());
+        var wrap = Path.Combine(Root, "agents", "agy", $"1.5.16-{platform}", "wrap");
         Assert.Equal([wrap], line["path"]!.AsArray().Select(p => p!.GetValue<string>()));
-        Assert.Contains($"exec \"{Root}/agents/agy/1.5.16/release/antigravity\"", File.ReadAllText(Path.Combine(wrap, "agy")));
+        Assert.Contains($"exec \"{Root}/agents/agy/1.5.16-{platform}/release/antigravity\"", File.ReadAllText(Path.Combine(wrap, "agy")));
+        Assert.Single(File.ReadAllLines(CurlLog), url => url == ReleaseUrl);
         Assert.Empty(Installs());
     }
 
     [Fact]
-    public void A_release_that_does_not_match_its_checksum_is_not_installed()
+    public void A_release_agent_whose_version_the_server_no_longer_offers_gets_the_one_it_names_and_says_so()
     {
-        var archive = ReleaseArchive("antigravity", "#!/bin/sh\n");
+        ServeRelease(ReleaseArchive("antigravity", "#!/bin/sh\n"), "1.6.0");
 
-        var result = Run($"agent=agy|file://{archive}|1.5.16|agy|{new string('0', 128)}|antigravity");
+        var result = Run("release=" + Release("1.5.16"));
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal("1.6.0", JsonNode.Parse(result.StdOut.Trim())!["version"]!.GetValue<string>());
+        Assert.Contains("1.5.16 is no longer offered", result.StdErr);
+    }
+
+    [Fact]
+    public void A_release_that_does_not_match_its_manifests_checksum_is_not_installed_and_says_why()
+    {
+        ServeRelease(ReleaseArchive("antigravity", "#!/bin/sh\n"), "1.5.16", sha512: new string('0', 128));
+
+        var result = Run("release=" + Release());
 
         Assert.NotEqual(0, result.ExitCode);
         Assert.Equal("", result.StdOut.Trim());
-        Assert.False(File.Exists(Path.Combine(Root, "agents", "agy", "1.5.16", ".ild-complete")));
-        Assert.False(File.Exists(Path.Combine(Root, "agents", "agy", "1.5.16", "wrap", "agy")));
+        Assert.Contains("does not match its manifest's checksum", result.StdErr);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(Root, "agents", "agy"), ".ild-complete", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void A_manifest_that_cannot_be_read_stops_the_script_with_a_clear_message()
+    {
+        WriteExecutable("curl", "#!/bin/bash\nexit 22");
+
+        var result = Run("release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("could not read the agy release manifest", result.StdErr);
+    }
+
+    [Fact]
+    public void A_run_host_without_curl_says_so_instead_of_failing_on_the_first_command_that_needs_it()
+    {
+        var tools = Directory.CreateDirectory(Path.Combine(_dir, "tools")).FullName;
+        foreach (var tool in new[] { "bash", "jq", "flock", "tar", "sha512sum", "uname", "mkdir", "rm", "chmod", "touch", "head", "tr", "readlink", "cat", "grep", "sed", "env", "dirname", "ls" })
+        {
+            var source = new[] { "/usr/bin/" + tool, "/bin/" + tool }.FirstOrDefault(File.Exists);
+            if (source is not null) File.CreateSymbolicLink(Path.Combine(tools, tool), source);
+        }
+
+        var result = RunWithPath(tools, "release=" + Release());
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("curl is needed to install agy", result.StdErr);
     }
 
     private static string[] PathOf(string stdout) => JsonNode.Parse(stdout.Trim())!["path"]!.AsArray().Select(p => p!.GetValue<string>()).ToArray();

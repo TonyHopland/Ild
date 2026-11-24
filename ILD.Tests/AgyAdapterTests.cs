@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.ModelGateway;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
@@ -150,7 +151,7 @@ public class AgyAdapterTests
 
     private const string SuccessTurn =
         "echo '{\"event\":\"init\",\"conversation_id\":\"31fe3f09-6406-48c6-862e-cf5eb36655c8\",\"init\":{}}'\n"
-        + "echo '{\"event\":\"step_update\",\"step_update\":{\"step_type\":\"agent_response\",\"text_delta\":\"ok\",\"usage\":{\"input_tokens\":11,\"output_tokens\":3}}}'\n"
+        + "echo '{\"event\":\"step_update\",\"step_update\":{\"step_index\":1,\"step_type\":\"agent_response\",\"text_delta\":\"ok\",\"usage\":{\"input_tokens\":11,\"output_tokens\":3}}}'\n"
         + "echo '{\"event\":\"result\",\"result\":{\"conversation_id\":\"31fe3f09-6406-48c6-862e-cf5eb36655c8\",\"status\":\"SUCCESS\",\"response\":\"ok\"}}'\n";
 
     private static AgentExecutionContext Context(PromptCapturingCli cli, string? sessionId = null)
@@ -197,36 +198,13 @@ public class AgyAdapterTests
     }
 
     [Fact]
-    public async Task A_failed_turn_fails_with_the_providers_error()
-    {
-        using var cli = new PromptCapturingCli(turn:
-            "echo '{\"event\":\"result\",\"result\":{\"conversation_id\":\"c\",\"status\":\"ERROR\",\"response\":\"\",\"error\":\"API error: RESOURCE_EXHAUSTED (code 429): Quota exceeded\"}}'\nexit 1\n");
-
-        var result = await new AgyAdapter(environment: new TestProcessEnvironment()).ExecuteAsync(Context(cli));
-
-        Assert.False(result.Success);
-        Assert.Contains("RESOURCE_EXHAUSTED", result.Error);
-        Assert.StartsWith("[agy-error]", result.Error);
-    }
-
-    [Fact]
-    public async Task A_cli_that_prints_nothing_fails_the_turn()
-    {
-        using var cli = new PromptCapturingCli(turn: PromptCapturingCli.SilentSuccess);
-
-        var result = await new AgyAdapter(environment: new TestProcessEnvironment()).ExecuteAsync(Context(cli));
-
-        Assert.False(result.Success);
-    }
-
-    [Fact]
     public async Task Without_a_key_the_turn_runs_on_the_stored_google_sign_in_and_keeps_the_token_in_a_file()
     {
         using var cli = new PromptCapturingCli(turn: "printf '%s' \"$AGY_CLI_FORCE_FILE_TOKEN_STORAGE\" > env-seen.txt\n" + SuccessTurn);
         var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
         try
         {
-            var token = Path.Combine(home, AgyAdapter.TokenFile);
+            var token = Path.Combine(home, AgyLogin.TokenFile);
             Directory.CreateDirectory(Path.GetDirectoryName(token)!);
             File.WriteAllText(token, "token");
             var environment = new TestProcessEnvironment { { "HOME", home } };
@@ -249,13 +227,116 @@ public class AgyAdapterTests
         var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
         try
         {
-            var scope = Path.Combine(home, AgyAdapter.ScopeFile);
+            var scope = Path.Combine(home, AgyLogin.ScopeFile);
             Directory.CreateDirectory(Path.GetDirectoryName(scope)!);
             File.WriteAllText(scope, "account");
 
             await new AgyAdapter(environment: new TestProcessEnvironment { { "HOME", home } }).ExecuteAsync(Context(cli));
 
             Assert.Equal("", File.ReadAllText(Path.Combine(cli.WorkDir, "env-seen.txt")));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // -- A home of its own, and a home shared ---------------------------------------------------------------------------
+
+    /// <summary>The local run host, except that the CLIs of a run work in <c>runHome</c>, as in a container or pod.</summary>
+    private class HostWithRunHome : System.Reflection.DispatchProxy
+    {
+        public string RunHome { get; set; } = "";
+
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args)
+            => targetMethod!.Name == nameof(ILD.Core.Services.RunHosts.IRunWorkspace.RunHomeFor)
+                ? RunHome
+                : targetMethod.Invoke(ILD.Core.Services.RunHosts.Local.LocalRunHost.Shared, args);
+    }
+
+    private static Microsoft.Extensions.DependencyInjection.IServiceScopeFactory ScopesWithRunHome(string runHome)
+    {
+        var host = System.Reflection.DispatchProxy.Create<ILD.Core.Services.RunHosts.IRunWorkspace, HostWithRunHome>();
+        ((HostWithRunHome)(object)host).RunHome = runHome;
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton(services, host);
+        return Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(
+            Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(services));
+    }
+
+    [Fact]
+    public async Task A_run_in_a_home_of_its_own_is_given_the_sign_in_for_the_turn_and_it_is_gone_when_the_turn_ends()
+    {
+        var store = Directory.CreateTempSubdirectory("ild-agy-store-").FullName;
+        var runHome = Directory.CreateTempSubdirectory("ild-agy-run-").FullName;
+        try
+        {
+            foreach (var file in AgyLogin.Files)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(store, file))!);
+                File.WriteAllText(Path.Combine(store, file), "secret-" + Path.GetFileName(file));
+            }
+            using var cli = new PromptCapturingCli(turn:
+                $"cat '{runHome}/{AgyLogin.TokenFile}' > seen-token.txt\nprintf '%s' \"$AGY_CLI_FORCE_FILE_TOKEN_STORAGE\" > env-seen.txt\n" + SuccessTurn);
+            var adapter = new AgyAdapter(ScopesWithRunHome(runHome), environment: new TestProcessEnvironment { { "HOME", store } });
+
+            var result = await adapter.ExecuteAsync(Context(cli));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal("secret-antigravity-oauth-token", File.ReadAllText(Path.Combine(cli.WorkDir, "seen-token.txt")));
+            Assert.Equal("1", File.ReadAllText(Path.Combine(cli.WorkDir, "env-seen.txt")));
+            foreach (var file in AgyLogin.Files)
+            {
+                Assert.False(File.Exists(Path.Combine(runHome, file)), file);
+                Assert.True(File.Exists(Path.Combine(store, file)), file);
+            }
+        }
+        finally
+        {
+            Directory.Delete(store, recursive: true);
+            Directory.Delete(runHome, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Turns_in_one_shared_home_that_write_the_mcp_config_take_turns_and_leave_it_as_it_was()
+    {
+        var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
+        try
+        {
+            var config = AgyAdapter.McpConfigPath(home);
+            Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+            File.WriteAllText(config, """{"mcpServers":{"mine":{"command":"x"}}}""");
+            var log = Path.Combine(home, "turns.log");
+            string Turn(string name) => $"echo 'start {name}' >> '{log}'\nsleep 1\necho 'end {name}' >> '{log}'\n" + SuccessTurn;
+            using var first = new PromptCapturingCli(turn: Turn("a"));
+            using var second = new PromptCapturingCli(turn: Turn("b"));
+            AgentExecutionContext WithServer(PromptCapturingCli cli)
+            {
+                var ctx = Context(cli);
+                return ctx with
+                {
+                    Provider = new AiProvider
+                    {
+                        Name = "agy-test", Type = "agy",
+                        Config = JsonSerializer.Serialize(new Dictionary<string, string>
+                        {
+                            ["binaryPath"] = cli.BinaryPath,
+                            ["customMcpServersJson"] = """{"docs":{"command":"npx","args":["docs-mcp"]}}""",
+                        }),
+                    },
+                };
+            }
+            var environment = new TestProcessEnvironment { { "HOME", home } };
+
+            var results = await Task.WhenAll(
+                new AgyAdapter(environment: environment).ExecuteAsync(WithServer(first)),
+                new AgyAdapter(environment: environment).ExecuteAsync(WithServer(second)));
+
+            Assert.All(results, result => Assert.True(result.Success, result.Error));
+            var turns = File.ReadAllLines(log).Select(line => line.Split(' ')[0]).ToArray();
+            Assert.Equal(["start", "end", "start", "end"], turns);
+            Assert.Equal("""{"mcpServers":{"mine":{"command":"x"}}}""", File.ReadAllText(config));
         }
         finally
         {

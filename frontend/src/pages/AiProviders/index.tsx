@@ -35,6 +35,9 @@ const PERSISTED_CONFIG_FIELDS = ["customMcpServersJson", "extraArgs"] as const;
 const isPersistedConfigField = (name: string) =>
   (PERSISTED_CONFIG_FIELDS as readonly string[]).includes(name);
 
+// Antigravity runs on a Gemini API key or a Google sign-in, not a Base URL.
+const isAntigravity = (type: string) => type.toLowerCase() === "agy";
+
 /** The tags typed into the comma-separated Tags field, first spelling of each kept. */
 const parseTags = (text: string) =>
   text
@@ -163,7 +166,7 @@ export default function AiProviders() {
   const takesLongLivedToken = type.toLowerCase() === "claude-code";
 
   // Antigravity runs on a Gemini API key, which ILD keeps and the agent never sees.
-  const takesGeminiKey = type.toLowerCase() === "agy";
+  const takesGeminiKey = isAntigravity(type);
   const takesApiKey = !cliAuth || takesLongLivedToken || takesGeminiKey;
 
   // What the selected type's adapter says about a model. Undefined means no
@@ -304,10 +307,10 @@ export default function AiProviders() {
                   <span className="ap-value">{provider.model}</span>
                 </div>
               )}
-              {(!cliAuthFor(provider.type) || provider.type.toLowerCase() === "agy") && (
+              {(!cliAuthFor(provider.type) || isAntigravity(provider.type)) && (
                 <div className="ap-field">
                   <span className="ap-label">
-                    {provider.type.toLowerCase() === "agy" ? "Gemini API key" : "API Key"}
+                    {isAntigravity(provider.type) ? "Gemini API key" : "API Key"}
                   </span>
                   <span className="ap-value ap-masked">
                     {provider.apiKey ? "••••••••" : "(not set)"}

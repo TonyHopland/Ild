@@ -13,9 +13,9 @@ public class AgyOutputParsingTests
     private static string Init(string id = Conversation)
         => $"{{\"event\":\"init\",\"conversation_id\":\"{id}\",\"init\":{{\"cwd\":\"/w\",\"tools\":[\"view_file\"],\"permission_mode\":\"always-proceed\"}}}}";
 
-    private static string Step(string type, string? text = null, int input = 0, int output = 0, int thinking = 0, int cacheRead = 0)
+    private static string Step(string type, string? text = null, int input = 0, int output = 0, int thinking = 0, int cacheRead = 0, int index = 1, string state = "DONE")
     {
-        var body = $"\"conversation_id\":\"{Conversation}\",\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"{type}\"";
+        var body = $"\"conversation_id\":\"{Conversation}\",\"step_index\":{index},\"state\":\"{state}\",\"step_type\":\"{type}\"";
         if (text is not null) body += $",\"text_delta\":\"{text}\"";
         if (input + output > 0)
             body += $",\"usage\":{{\"input_tokens\":{input},\"output_tokens\":{output},\"thinking_tokens\":{thinking},\"cache_read_tokens\":{cacheRead},\"total_tokens\":{input + output + thinking}}}";
@@ -118,7 +118,7 @@ public class AgyOutputParsingTests
     [Fact]
     public void Usage_is_the_sum_of_this_launchs_agent_responses_not_the_results_running_total()
     {
-        var raw = string.Join('\n', Init(), Step("agent_response", "a", 100, 10, thinking: 5, cacheRead: 40), Step("agent_response", "b", 200, 20), Result("SUCCESS", "ab"));
+        var raw = string.Join('\n', Init(), Step("agent_response", "a", 100, 10, thinking: 5, cacheRead: 40, index: 1), Step("agent_response", "b", 200, 20, index: 3), Result("SUCCESS", "ab"));
 
         var usage = AdapterUsageParser.ParseAgy(raw);
 
@@ -127,6 +127,46 @@ public class AgyOutputParsingTests
         Assert.Equal(35, usage.OutputTokens);
         Assert.Equal(40, usage.CacheReadTokens);
         Assert.Null(usage.CostUsd);
+    }
+
+    // The shape agy 1.5.16 prints for one model call: an ACTIVE update per text delta with no usage, then the DONE one with it.
+    private static readonly string[] CapturedStep =
+    [
+        "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"c\",\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"Hel\"}}",
+        "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"c\",\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"lo, \"}}",
+        "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"c\",\"step_index\":1,\"state\":\"ACTIVE\",\"step_type\":\"agent_response\",\"text_delta\":\"world\"}}",
+        "{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"c\",\"step_index\":1,\"state\":\"DONE\",\"step_type\":\"agent_response\",\"text_delta\":\"\\n\",\"duration_seconds\":2.2,\"usage\":{\"input_tokens\":10172,\"output_tokens\":28,\"thinking_tokens\":22,\"cache_read_tokens\":0,\"total_tokens\":10222}}}",
+    ];
+
+    [Fact]
+    public void A_model_call_streamed_as_several_deltas_is_counted_once()
+    {
+        var usage = AdapterUsageParser.ParseAgy(string.Join('\n', CapturedStep));
+
+        Assert.Equal(10172, usage!.InputTokens);
+        Assert.Equal(50, usage.OutputTokens);
+    }
+
+    [Fact]
+    public void Two_model_calls_each_with_deltas_are_each_counted_once()
+    {
+        var second = CapturedStep.Select(line => line.Replace("\"step_index\":1", "\"step_index\":3", StringComparison.Ordinal));
+
+        var usage = AdapterUsageParser.ParseAgy(string.Join('\n', CapturedStep.Concat(second)));
+
+        Assert.Equal(20344, usage!.InputTokens);
+        Assert.Equal(100, usage.OutputTokens);
+    }
+
+    [Fact]
+    public void A_step_that_reports_usage_on_more_than_one_update_is_counted_at_the_last()
+    {
+        var raw = string.Join('\n', Step("agent_response", "a", 5, 1, index: 2, state: "ACTIVE"), Step("agent_response", "b", 40, 4, index: 2));
+
+        var usage = AdapterUsageParser.ParseAgy(raw);
+
+        Assert.Equal(40, usage!.InputTokens);
+        Assert.Equal(4, usage.OutputTokens);
     }
 
     [Theory]

@@ -215,24 +215,25 @@ public static class AdapterUsageParser
 
     /// <summary>
     /// The usage of one <c>agy --output-format stream-json</c> launch: the sum of its <c>agent_response</c> steps, each of
-    /// which counts one model call. Thinking tokens are output. Agy reports no cost. Returns <c>null</c> when no step
+    /// which counts one model call. A step is announced many times (an <c>ACTIVE</c> update per text delta, then <c>DONE</c>
+    /// with its usage), so each step is counted once, by its index, at the last usage it reported. Thinking tokens are output. Agy reports no cost. Returns <c>null</c> when no step
     /// reported tokens.
     /// </summary>
     public static TokenUsage? ParseAgy(string? rawStdout)
     {
-        long input = 0, output = 0, cacheRead = 0;
+        var calls = new Dictionary<long, (long Input, long Output, long CacheRead)>();
         ForEachJsonObject(rawStdout, root =>
         {
             if (StringProperty(root, "event") != "step_update"
                 || ObjectProperty(root, "step_update") is not { } step
                 || StringProperty(step, "step_type") != "agent_response"
+                || !step.TryGetProperty("step_index", out var index) || !index.TryGetInt64(out var stepIndex)
                 || ObjectProperty(step, "usage") is not { } usage)
                 return;
 
-            input += SumLongs(usage, "input_tokens");
-            output += SumLongs(usage, "output_tokens", "thinking_tokens");
-            cacheRead += SumLongs(usage, "cache_read_tokens");
+            calls[stepIndex] = (SumLongs(usage, "input_tokens"), SumLongs(usage, "output_tokens", "thinking_tokens"), SumLongs(usage, "cache_read_tokens"));
         });
+        long input = calls.Values.Sum(c => c.Input), output = calls.Values.Sum(c => c.Output), cacheRead = calls.Values.Sum(c => c.CacheRead);
 
         return input == 0 && output == 0 ? null : new TokenUsage(input, output, null, CacheReadTokens: cacheRead);
     }

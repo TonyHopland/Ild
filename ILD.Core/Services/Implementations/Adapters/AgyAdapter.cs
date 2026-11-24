@@ -19,8 +19,9 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// With a Gemini API key saved on the provider the agent never holds it: the CLI is pointed at the
 /// model gateway (<c>AGY_LLM_GATEWAY_URL</c>) with the run's placeholder as its key, and the gateway adds the real
 /// one. Without a key it uses the Google sign-in made in the provider terminal, a copy of which the run is given
-/// (the sign-in cannot go through the gateway, which speaks the Gemini API only). <see cref="AiProvider.BaseUrl"/> is ignored. <see cref="AiProvider.Model"/> is passed as <c>--model</c>
-/// when set; blank leaves the CLI's own default.
+/// (the sign-in cannot go through the gateway, which speaks the Gemini API only). That copy is plain text in the run's home, so
+/// the turn removes it when it ends. <see cref="AiProvider.BaseUrl"/> is ignored. <see cref="AiProvider.Model"/> is passed as
+/// <c>--model</c> when set; blank leaves the CLI's own default.
 ///
 /// A conversation is resumed with <c>--conversation &lt;id&gt;</c>. Its id is the <c>conversation_id</c> the stream
 /// names, and the conversation is one SQLite file under <c>~/.gemini/antigravity-cli/conversations</c>, which is
@@ -28,8 +29,9 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///
 /// The ILD MCP server and the provider's custom MCP servers reach the CLI through the user-level
 /// <c>~/.gemini/config/mcp_config.json</c> of the home the run's CLIs have, the one place it reads them that is
-/// not the repository: the file is written before the launch and put back as it was after. Where that home is
-/// shared (ILD running agents on its own machine), two runs at once would share the file too.
+/// not the repository: the file is written before the launch and put back as it was after. The CLI has no flag for a
+/// file of its own. Where that home is shared (ILD running agents on its own machine), turns that write it wait for one another, so
+/// the file one puts back is never another's; a run in a home of its own does not wait.
 /// </summary>
 public sealed class AgyAdapter : CliAgentAdapterBase
 {
@@ -57,14 +59,6 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     public override CredentialPath? CredentialPathFor(AiProvider provider)
         => ModelCredentialSource.UpstreamKey(provider) is null ? CredentialPath.ReadOnlyCopy : CredentialPath.Gateway;
 
-    /// <summary>
-    /// The token the CLI writes when it has no keyring, and the file naming the account it belongs to, relative to the home.
-    /// Seen written by agy 1.5.16 after a sign-in in a provider terminal; the token file is JSON with a `token` key.
-    /// </summary>
-    internal const string TokenFile = ".gemini/antigravity-cli/antigravity-oauth-token";
-    internal const string ScopeFile = ".config/antigravity/credential-user-scope";
-    internal static readonly string[] LoginFiles = [TokenFile, ScopeFile];
-
     /// <summary>Set, the CLI keeps its sign-in in a file instead of the OS keyring, which a run's home and the terminal's have none of.</summary>
     public const string ForceFileTokenStorage = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE";
 
@@ -91,6 +85,8 @@ public sealed class AgyAdapter : CliAgentAdapterBase
         private readonly string _home = HomeFor(adapter, worktreePath);
         private readonly bool _hasKey = ModelCredentialSource.UpstreamKey(ctx.Provider) is not null;
         private bool _hasLogin;
+        private readonly List<string> _copiedLogin = [];
+        private SemaphoreSlim? _configGate;
         private string? _mcpConfigPath;
         private string? _mcpConfigBefore;
         private StreamResult? _stdout;
@@ -102,12 +98,15 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
         public override async Task PrepareAsync()
         {
-            if (!_hasKey) _hasLogin = await adapter.CopyStoredLoginAsync(_home, ctx.Cancel);
+            if (!_hasKey) _hasLogin = await adapter.CopyStoredLoginAsync(_home, _copiedLogin, ctx.Cancel);
 
             var servers = BuildMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools);
             if (servers.Count == 0) return;
 
             var path = McpConfigPath(_home);
+            // Held until the turn ends: the file is put back as it was, which two turns in one shared home would do over each other.
+            _configGate = ConfigGates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+            await _configGate.WaitAsync(ctx.Cancel);
             var existing = await adapter.ParseSessionFileAsync(path, reader => reader.ReadToEnd(), ctx.Cancel);
             var merged = MergeMcpConfig(existing, servers);
             await adapter.RunHost.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
@@ -160,20 +159,29 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
         public override Task<TokenUsage?> UsageAsync() => Task.FromResult(AdapterUsageParser.ParseAgy(_stdout!.RawStdout));
 
+        // What the turn put in the home is taken out again, each step on its own so that one failing leaves the others done, and
+        // none can fail the turn that has ended.
         public override async ValueTask DisposeAsync()
         {
-            if (_mcpConfigPath is null) return;
             try
             {
-                if (_mcpConfigBefore is null)
-                    await adapter.RunHost.DeleteAsync([_mcpConfigPath]);
-                else
-                    await adapter.RunHost.WriteFileAsync(_mcpConfigPath, _mcpConfigBefore);
+                if (_copiedLogin.Count > 0)
+                    await TryAsync("remove the copy of the Antigravity sign-in from the run's home", () => adapter.RunHost.DeleteAsync(_copiedLogin));
+                if (_mcpConfigPath is not null)
+                    await TryAsync($"put back the Antigravity MCP config {_mcpConfigPath}", () => _mcpConfigBefore is null
+                        ? adapter.RunHost.DeleteAsync([_mcpConfigPath])
+                        : adapter.RunHost.WriteFileAsync(_mcpConfigPath, _mcpConfigBefore));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            finally
             {
-                adapter._logger.LogWarning(ex, "Could not put back the Antigravity MCP config {Path}", _mcpConfigPath);
+                _configGate?.Release();
             }
+        }
+
+        private async Task TryAsync(string what, Func<Task> step)
+        {
+            try { await step(); }
+            catch (Exception ex) { adapter._logger.LogWarning(ex, "Could not {Step}: {Reason}", what, ex.Message); }
         }
     }
 
@@ -252,13 +260,14 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// Gives a run in a home of its own a copy of the Google sign-in the provider terminal stored, which only ILD can read.
-    /// A run on this machine's own home already has it. False when there is no stored token, whatever else is stored.
+    /// A run on this machine's own home already has it. What is copied is added to <paramref name="copied"/>, for the turn to remove when it
+    /// ends: the token sits there in plain text. False when there is no stored token, whatever else is stored.
     /// </summary>
-    private async Task<bool> CopyStoredLoginAsync(string runHome, CancellationToken ct)
+    private async Task<bool> CopyStoredLoginAsync(string runHome, List<string> copied, CancellationToken ct)
     {
         var storeHome = EnvironmentVariables.Get("HOME") is { Length: > 0 } home ? home : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var found = false;
-        foreach (var relative in LoginFiles)
+        foreach (var relative in AgyLogin.Files)
         {
             string text;
             try
@@ -274,16 +283,19 @@ public sealed class AgyAdapter : CliAgentAdapterBase
                 continue;
             }
 
-            found |= relative == TokenFile;
+            found |= relative == AgyLogin.TokenFile;
             if (!string.Equals(runHome, storeHome, StringComparison.Ordinal))
             {
                 var target = Path.Combine(runHome, relative);
                 await RunHost.CreateDirectoryAsync(Path.GetDirectoryName(target)!, ct);
                 await RunHost.WriteFileAsync(target, text, ct);
+                copied.Add(target);
             }
         }
         return found;
     }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> ConfigGates = new();
 
     private static string HomeFor(AgyAdapter adapter, string worktreePath)
         => adapter.RunHost.RunHomeFor(worktreePath)
