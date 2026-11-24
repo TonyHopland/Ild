@@ -79,6 +79,8 @@ public sealed class RunToolStoreScriptTests : IDisposable
         catch (System.ComponentModel.Win32Exception) { return false; }
     }
 
+    // The script looks for musl in /lib, which a test cannot change; it runs a copy of the script that looks here instead.
+    private string? _muslGlob;
     private string? _sdk;
     private IReadOnlyDictionary<string, string> _environment = new Dictionary<string, string>();
 
@@ -88,7 +90,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsLinux() && Has("jq") && Has("flock"), "needs Linux with bash, jq and flock");
         var psi = new ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in new[] { "-c", RunToolStore.InstallScript.Replace("\r\n", "\n"), "bash" }.Concat(arguments)) psi.ArgumentList.Add(a);
+        foreach (var a in new[] { "-c", ScriptText(), "bash" }.Concat(arguments)) psi.ArgumentList.Add(a);
         psi.Environment["PATH"] = onlyPath ?? $"{Bin}:{Environment.GetEnvironmentVariable("PATH")}";
         psi.Environment["ILD_TOOLS_ROOT"] = Root;
         psi.Environment["MISE_DATA_DIR"] = Path.Combine(Root, "mise");
@@ -101,6 +103,14 @@ public sealed class RunToolStoreScriptTests : IDisposable
         var stderr = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
         return (process.ExitCode, stdout.Result, stderr.Result);
+    }
+
+    private string ScriptText()
+    {
+        var script = RunToolStore.InstallScript.Replace("\r\n", "\n");
+        if (_muslGlob is null) return script;
+        Assert.Contains("'/lib/*musl*'", script);
+        return script.Replace("'/lib/*musl*'", $"'{_muslGlob}'");
     }
 
     private string[] Installs() => File.Exists(Log) ? File.ReadAllLines(Log) : [];
@@ -181,11 +191,11 @@ public sealed class RunToolStoreScriptTests : IDisposable
     private string CurlLog => Path.Combine(_dir, "curl.log");
 
     /// <summary>A curl that answers the manifest and the archive from files, and logs each address it is asked for.</summary>
-    private void ServeRelease(string archive, string version, string? sha512 = null)
+    private void ServeRelease(string archive, string version, string? sha512 = null, string url = ReleaseUrl)
     {
         var manifest = Path.Combine(_dir, "manifest.json");
         sha512 ??= Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(File.ReadAllBytes(archive)));
-        File.WriteAllText(manifest, $$"""{"version":"{{version}}","url":"{{ReleaseUrl}}","sha512":"{{sha512}}"}""");
+        File.WriteAllText(manifest, $$"""{"version":"{{version}}","url":"{{url}}","sha512":"{{sha512}}"}""");
         WriteExecutable("curl", """
             #!/bin/bash
             out=""; url=""
@@ -232,7 +242,7 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Uname(system, machine);
         var libc = Directory.CreateDirectory(Path.Combine(_dir, "lib")).FullName;
         if (musl) File.WriteAllText(Path.Combine(libc, "ld-musl-x86_64.so.1"), "");
-        _environment = new Dictionary<string, string>(_environment) { ["ILD_MUSL_GLOB"] = Path.Combine(libc, "*musl*") };
+        _muslGlob = Path.Combine(libc, "*musl*");
 
         var result = Run("release=" + Release());
 
@@ -402,6 +412,48 @@ public sealed class RunToolStoreScriptTests : IDisposable
         Assert.Contains("incomplete", result.StdErr);
         Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(Root, "agents")));
         Assert.False(File.Exists(Path.Combine(_dir, "x")));
+    }
+
+    [Theory]
+    [InlineData("../../x", ReleaseUrl, null)]
+    [InlineData("1.6.0", "http://downloads.example/agy.tar.gz", null)]
+    [InlineData("1.6.0", ReleaseUrl, "")]
+    public void A_manifest_that_is_not_usable_falls_back_to_the_install_on_the_host_like_one_that_cannot_be_read(string version, string url, string? sha512)
+    {
+        var archive = ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript);
+        ServeRelease(archive, "1.5.16");
+        Run("release=" + Release("1.5.16"));
+        ServeRelease(archive, version, sha512, url);
+
+        var result = Run("release=" + Release("1.5.20"));
+
+        Assert.True(result.ExitCode == 0, result.StdErr);
+        Assert.Equal("1.5.16", JsonNode.Parse(result.StdOut.Trim())!["version"]!.GetValue<string>());
+        Assert.Contains("release manifest", result.StdErr);
+        Assert.Contains("is incomplete; the installed agy 1.5.16 is used", result.StdErr);
+        Assert.Single(Directory.GetDirectories(Path.Combine(Root, "agents", "agy")));
+        Assert.False(File.Exists(Path.Combine(_dir, "x")));
+        Assert.False(File.Exists(Path.Combine(Root, "x")));
+    }
+
+    [Fact]
+    public void A_manifest_that_is_not_json_falls_back_to_the_install_or_says_there_is_none()
+    {
+        var archive = ReleaseArchive("antigravity", ManagedAgentReleaseTests.AgentScript);
+        ServeRelease(archive, "1.5.16");
+        File.WriteAllText(Path.Combine(_dir, "manifest.json"), "<html>not found</html>");
+
+        var none = Run("release=" + Release("1.5.20"));
+        Assert.NotEqual(0, none.ExitCode);
+        Assert.Contains("is incomplete, and no agy is installed here", none.StdErr);
+
+        File.WriteAllText(Path.Combine(_dir, "manifest.json"), $$"""{"version":"1.5.16","url":"{{ReleaseUrl}}","sha512":"{{Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(File.ReadAllBytes(archive)))}}"}""");
+        Run("release=" + Release("1.5.16"));
+        File.WriteAllText(Path.Combine(_dir, "manifest.json"), "<html>not found</html>");
+
+        var installed = Run("release=" + Release("1.5.20"));
+        Assert.True(installed.ExitCode == 0, installed.StdErr);
+        Assert.Equal("1.5.16", JsonNode.Parse(installed.StdOut.Trim())!["version"]!.GetValue<string>());
     }
 
     [Fact]

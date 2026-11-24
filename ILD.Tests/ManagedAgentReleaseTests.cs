@@ -228,4 +228,35 @@ public class ManagedAgentReleaseTests : IDisposable
         Assert.Equal(requests + 1, _downloads.Requests.Count);
         Assert.Null(await service.GetAutoUpdatePlanAsync("agy", TimeSpan.Zero, DateTimeOffset.UtcNow, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task The_api_answers_a_stale_rollback_with_a_409_naming_the_reason_and_changes_nothing()
+    {
+        var service = Service();
+        await service.UpdateAsync("agy", TestContext.Current.CancellationToken);
+        _downloads.ManifestVersion = "1.6.0";
+        await service.UpdateAsync("agy", TestContext.Current.CancellationToken);
+        var before = ManagedAgentInstall.CurrentVersionId(_dataRoot, _agent);
+        var controller = new ILD.Api.Controllers.ManagedAgentsController(service);
+
+        var result = Assert.IsType<Microsoft.AspNetCore.Mvc.ConflictObjectResult>(
+            await controller.Rollback("agy", new ILD.Api.Controllers.ManagedAgentsController.RollbackRequest("1.4.0"), TestContext.Current.CancellationToken));
+
+        Assert.Contains("would now roll back to 1.5.16, not 1.4.0", result.Value!.ToString());
+        Assert.Equal(before, ManagedAgentInstall.CurrentVersionId(_dataRoot, _agent));
+        Assert.Equal(2, Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Length);
+    }
+
+    [Fact]
+    public async Task The_api_answers_a_failed_download_with_a_502_naming_the_reason_and_leaves_no_version_dir()
+    {
+        _downloads.ManifestSha512 = new string('0', 128);
+        var controller = new ILD.Api.Controllers.ManagedAgentsController(Service());
+
+        var result = Assert.IsType<Microsoft.AspNetCore.Mvc.ObjectResult>(await controller.Update("agy", TestContext.Current.CancellationToken));
+
+        Assert.Equal(502, result.StatusCode);
+        Assert.Contains("checksum", result.Value!.ToString());
+        Assert.Empty(Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
+    }
 }

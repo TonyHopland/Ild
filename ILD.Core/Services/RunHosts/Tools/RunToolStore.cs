@@ -290,30 +290,36 @@ public static class RunToolStore
         # unreachable, the newest install already here is used, with a warning; with none, the script stops. An install that is
         # already complete makes no request when it is the version ILD holds. The extraction mirrors ManagedAgentRelease.InstallReleaseAsync.
         ensure_release_agent() {
-          local key="$1" manifest="$2" want="$3" bin="$4" entry="$5" tool os arch platform info version="" url="" sha512="" dir newest
+          local key="$1" manifest="$2" want="$3" bin="$4" entry="$5" tool os arch platform info problem version="" url="" sha512="" dir newest
           for tool in curl sha512sum tar; do
             command -v "$tool" >/dev/null || { echo "ild: $tool is needed to install $key and is not on this machine" >&2; return 1; }
           done
           case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "ild: $key has no build for $(uname -s)" >&2; return 1 ;; esac
           case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "ild: $key has no build for $(uname -m)" >&2; return 1 ;; esac
           platform="${os}_${arch}"
-          if [ "$os" = linux ] && compgen -G "${ILD_MUSL_GLOB:-/lib/*musl*}" >/dev/null; then platform="${platform}_musl"; fi
+          if [ "$os" = linux ] && compgen -G '/lib/*musl*' >/dev/null; then platform="${platform}_musl"; fi
 
           if [ -e "$root/agents/$key/$want-$platform/.ild-complete" ]; then
             version="$want"
           else
+            # A manifest that cannot be read, or that is not usable, is treated alike: the newest install on this host stands in for it.
+            problem=""
             if info="$(curl -fsSL "${manifest//\{platform\}/$platform}")"; then
-              version="$(jq -r '.version // empty' <<< "$info")"; url="$(jq -r '.url // empty' <<< "$info")"; sha512="$(jq -r '.sha512 // empty' <<< "$info")"
+              version="$(jq -r '.version // empty' <<< "$info" 2>/dev/null || true)"; url="$(jq -r '.url // empty' <<< "$info" 2>/dev/null || true)"; sha512="$(jq -r '.sha512 // empty' <<< "$info" 2>/dev/null || true)"
               case "$url" in https://*) ;; *) url="" ;; esac
               # The version names a folder in the store, so it is only taken as a version number, never as a path.
               [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || version=""
-              if [ -z "$version" ] || [ -z "$url" ] || [ -z "$sha512" ]; then echo "ild: the $key release manifest for $platform is incomplete" >&2; return 1; fi
-              [ "$version" = "$want" ] || echo "ild: $key $want is no longer offered; the release server names $version, which is installed instead" >&2
+              if [ -z "$version" ] || [ -z "$url" ] || [ -z "$sha512" ]; then problem="the $key release manifest for $platform is incomplete"; fi
             else
+              problem="could not read the $key release manifest for $platform"
+            fi
+            if [ -n "$problem" ]; then
               newest="$({ compgen -G "$root/agents/$key/*-$platform/.ild-complete" || true; } | sed -E "s|.*/agents/$key/(.*)-$platform/.ild-complete|\1|" | sort -V | tail -n 1)"
-              if [ -z "$newest" ]; then echo "ild: could not read the $key release manifest for $platform, and no $key is installed here" >&2; return 1; fi
-              echo "ild: could not read the $key release manifest for $platform; the installed $key $newest is used" >&2
+              if [ -z "$newest" ]; then echo "ild: $problem, and no $key is installed here" >&2; return 1; fi
+              echo "ild: $problem; the installed $key $newest is used" >&2
               version="$newest"
+            elif [ "$version" != "$want" ]; then
+              echo "ild: $key $want is no longer offered; the release server names $version, which is installed instead" >&2
             fi
           fi
 
