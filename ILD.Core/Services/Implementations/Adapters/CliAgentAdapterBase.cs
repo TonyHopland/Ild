@@ -521,6 +521,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
         var stored = await store.GetMetadataAsync(key, ct);
         if (stored is not null
+            && SessionSnapshotFormats.IsLines(format)
             && stored.Format == format
             && length >= stored.ByteLength
             && await TailHashAsync(path, stored.ByteLength, ct) == stored.TailHash)

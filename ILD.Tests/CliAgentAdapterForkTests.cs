@@ -59,6 +59,36 @@ public class CliAgentAdapterForkTests
     }
 
     [Fact]
+    public async Task A_database_session_that_changed_in_place_is_saved_whole_not_appended_to()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var db = new TestDb();
+        var runId = await TestRuns.SeedAsync(db);
+        await using var provider = SnapshotServices(db);
+        var adapter = new SnapshotAdapter(provider.GetRequiredService<IServiceScopeFactory>());
+        var dir = Directory.CreateTempSubdirectory("ild-persist-").FullName;
+        try
+        {
+            var path = Path.Combine(dir, "sess-1.db");
+            var body = new string('x', 6000);
+            File.WriteAllText(path, "HEADER-ONE" + body);
+            await adapter.PersistAsync(runId, "sess-1", path, NullLogger.Instance, ct, SessionSnapshotFormats.AgyDb);
+
+            // The first page changes and the file grows, while the bytes before the old end keep the tail the store holds.
+            var second = "HEADER-TWO" + body + "-and-more-pages";
+            File.WriteAllText(path, second);
+            await adapter.PersistAsync(runId, "sess-1", path, NullLogger.Instance, ct, SessionSnapshotFormats.AgyDb);
+
+            var key = SessionSnapshotKey.ForRun(runId, "ClaudeCode", "sess-1");
+            Assert.Equal(second, await SessionSnapshotTestSupport.ReadAllTextAsync(new AdapterSessionSnapshotStore(db.Fresh()), key, ct));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public async Task A_save_cut_short_by_a_cancelled_turn_is_not_reported_as_a_failure_and_does_not_throw()
     {
         using var db = new TestDb();
@@ -105,7 +135,7 @@ public class CliAgentAdapterForkTests
         public Task<bool> ForkAsync(Guid runId, string source, string dest, CancellationToken ct)
             => ForkSessionSnapshotAsync(runId, source, dest, ct);
 
-        public Task PersistAsync(Guid runId, string sessionId, string path, ILogger logger, CancellationToken ct)
+        public Task PersistAsync(Guid runId, string sessionId, string path, ILogger logger, CancellationToken ct, string format = SessionSnapshotFormats.ClaudeJsonl)
             => PersistSessionFileAsync(
                 new AgentExecutionContext(
                     Provider: new AiProvider { Name = "p", Type = "claude-code", BaseUrl = string.Empty, Model = string.Empty },
@@ -115,6 +145,6 @@ public class CliAgentAdapterForkTests
                     Cancel: ct,
                     SessionId: sessionId,
                     ManageSession: true),
-                sessionId, path, SessionSnapshotFormats.ClaudeJsonl, logger);
+                sessionId, path, format, logger);
     }
 }

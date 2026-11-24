@@ -216,7 +216,7 @@ POST /gateway/google/v1beta/models/<model>:streamGenerateContent?alt=sse   Beare
 - **Placeholder shape**: any string. The CLI also needed no login file.
 - **Models**: `--model` is checked against the list the CLI gets from `GET /v1beta/models`, so an unknown id fails at once with the list of known ones.
 - **Output**: `stream-json` prints `init`, `step_update` (an `agent_response` step carries `text_delta` and that call's `usage`) and a final `result` with `conversation_id`, `status`, `response`, `error` and the conversation's running `usage`. A `429` is retried for minutes before the result reports `API error … RESOURCE_EXHAUSTED`.
-- **Resume**: `--conversation <id>` continues a conversation held in one SQLite file, `~/.gemini/antigravity-cli/conversations/<id>.db`. Copied alone into a fresh `HOME`, it resumed (`num_turns` counted on). An unknown id prints a warning and starts a new conversation.
+- **Resume**: `--conversation <id>` continues a conversation held in one SQLite file, `~/.gemini/antigravity-cli/conversations/<id>.db`. Copied alone into a fresh `HOME`, it resumed (`num_turns` counted on). After each exit only the `.db` was in the folder (no `-wal` or `-journal` file), so the one file is the whole conversation. It changes in place, so ILD saves it whole each turn, never as an append. An unknown id prints a warning and starts a new conversation.
 - **MCP servers** are read from `~/.gemini/config/mcp_config.json` and from `.agents/mcp_config.json` in the working directory. There is no flag or variable for a file of one's own.
 - **Not covered**: a Google account login. It talks to Google's Code Assist endpoints, not the Gemini API, which the gateway mode does not reach, so a subscription cannot go through the gateway.
 
