@@ -39,33 +39,29 @@ public sealed class CredentialImportTests : IDisposable
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(stored));
     }
 
-    [Theory]
-    [InlineData(".gemini/antigravity-cli/jetski-standalone-oauth-token")]
-    [InlineData(".gemini/antigravity-cli/antigravity-oauth-token")]
-    public async Task An_antigravity_sign_in_is_imported_whatever_form_its_file_takes(string file)
-    {
-        Put(Throwaway, file, "opaque-token-bytes");
-
-        Assert.Equal([file], await ImportAsync());
-        Assert.Equal("opaque-token-bytes", File.ReadAllText(Path.Combine(Store, file)));
-    }
-
     [Fact]
-    public async Task An_antigravity_token_file_is_found_by_its_name_whatever_the_cli_called_it()
+    public async Task An_antigravity_sign_in_is_its_token_file_and_the_account_file()
     {
-        Put(Throwaway, ".config/antigravity/oauth-credentials", "enc");
-        Put(Throwaway, ".config/antigravity/credential-user-scope", "me@example.com");
+        Put(Throwaway, AgyAdapter.TokenFile, """{"token":"t","auth_method":"oauth","id_token_email":"me@example.com"}""");
+        Put(Throwaway, AgyAdapter.ScopeFile, "ue3db121817ced2c0");
         Put(Throwaway, ".config/antigravity/plugin-secrets.json", "{}");
-        Put(Throwaway, ".gemini/antigravity-cli/conversations/c.db", "not a login");
         Put(Throwaway, ".gemini/antigravity-cli/installation_id", "id");
 
         var imported = await ImportAsync();
 
-        Assert.Equal(
-            [".config/antigravity/credential-user-scope", ".config/antigravity/oauth-credentials"],
-            imported.Order(StringComparer.Ordinal));
-        Assert.Equal("enc", File.ReadAllText(Path.Combine(Store, ".config", "antigravity", "oauth-credentials")));
+        Assert.Equal([AgyAdapter.TokenFile, AgyAdapter.ScopeFile], imported);
+        Assert.Contains("\"token\"", File.ReadAllText(Path.Combine(Store, AgyAdapter.TokenFile)));
         Assert.False(File.Exists(Path.Combine(Store, ".config", "antigravity", "plugin-secrets.json")));
+    }
+
+    [Fact]
+    public async Task An_antigravity_token_file_without_a_token_does_not_replace_the_one_in_the_store()
+    {
+        Put(Store, AgyAdapter.TokenFile, """{"token":"keep"}""");
+        Put(Throwaway, AgyAdapter.TokenFile, "{}");
+
+        Assert.DoesNotContain(AgyAdapter.TokenFile, await ImportAsync());
+        Assert.Contains("keep", File.ReadAllText(Path.Combine(Store, AgyAdapter.TokenFile)));
     }
 
     [Fact]

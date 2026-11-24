@@ -26,7 +26,8 @@ public static class CredentialImport
         new(".copilot/config.json", node => node["authTokens"] is JsonObject { Count: > 0 }, Jsonc: true),
         new(".pi/agent/auth.json", node => node is JsonObject { Count: > 0 }),
         new(".local/share/opencode/auth.json", node => node is JsonObject { Count: > 0 }),
-        .. AgyAdapter.LoginFiles.Select(file => new Login(file, _ => true, Json: false)),
+        new(AgyAdapter.TokenFile, node => node["token"] is not null),
+        new(AgyAdapter.ScopeFile, _ => true, Json: false),
     ];
 
     /// <returns>The files imported, relative to the home.</returns>
@@ -43,20 +44,18 @@ public static class CredentialImport
                 text = await reader.ReadToEndAsync(token);
             });
             return text;
-        }, storeHome, logger, ct, AgyAdapter.FindLoginFiles(throwawayHome, logger));
+        }, storeHome, logger, ct);
 
     /// <summary>
     /// Keeps the logins that <paramref name="read"/> finds, given a path relative to the home they were written in. It
     /// returns the file's text, or null for a file that is not there, is not a regular file, or is over <see cref="MaxBytes"/>.
     /// </summary>
     /// <returns>The files imported, relative to the home.</returns>
-    /// <param name="found">Further files, relative to the home, that hold a login in a form that is not known: any non-empty file is kept.</param>
     public static async Task<IReadOnlyList<string>> ImportAsync(
-        Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct, IEnumerable<string>? found = null)
+        Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct)
     {
         var imported = new List<string>();
-        var known = Logins.Select(login => login.RelativePath).ToHashSet(StringComparer.Ordinal);
-        foreach (var login in Logins.Concat((found ?? []).Where(path => !known.Contains(path)).Select(path => new Login(path, _ => true, Json: false))))
+                foreach (var login in Logins)
         {
             try
             {
