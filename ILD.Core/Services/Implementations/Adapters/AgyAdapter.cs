@@ -252,7 +252,7 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// Gives a run in a home of its own a copy of the Google sign-in the provider terminal stored, which only ILD can read.
-    /// A run on this machine's own home already has it. False when there is no stored sign-in.
+    /// A run on this machine's own home already has it. False when there is no stored token, whatever else is stored.
     /// </summary>
     private async Task<bool> CopyStoredLoginAsync(string runHome, CancellationToken ct)
     {
@@ -274,7 +274,7 @@ public sealed class AgyAdapter : CliAgentAdapterBase
                 continue;
             }
 
-            found = true;
+            found |= relative == TokenFile;
             if (!string.Equals(runHome, storeHome, StringComparison.Ordinal))
             {
                 var target = Path.Combine(runHome, relative);

@@ -55,7 +55,7 @@ public static class CredentialImport
         Func<string, CancellationToken, Task<string?>> read, string storeHome, ILogger logger, CancellationToken ct)
     {
         var imported = new List<string>();
-                foreach (var login in Logins)
+        foreach (var login in Logins)
         {
             try
             {

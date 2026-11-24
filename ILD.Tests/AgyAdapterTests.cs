@@ -241,4 +241,25 @@ public class AgyAdapterTests
             Directory.Delete(home, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task An_account_file_without_a_token_is_not_a_sign_in()
+    {
+        using var cli = new PromptCapturingCli(turn: "printf '%s' \"$AGY_CLI_FORCE_FILE_TOKEN_STORAGE\" > env-seen.txt\n" + SuccessTurn);
+        var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
+        try
+        {
+            var scope = Path.Combine(home, AgyAdapter.ScopeFile);
+            Directory.CreateDirectory(Path.GetDirectoryName(scope)!);
+            File.WriteAllText(scope, "account");
+
+            await new AgyAdapter(environment: new TestProcessEnvironment { { "HOME", home } }).ExecuteAsync(Context(cli));
+
+            Assert.Equal("", File.ReadAllText(Path.Combine(cli.WorkDir, "env-seen.txt")));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
 }
