@@ -63,6 +63,7 @@ public class AgentAdaptersControllerTests
         Assert.Equal("Claude Code", listed["claude-code"].DisplayName);
         Assert.Equal("Copilot", listed["copilot"].DisplayName);
         Assert.Equal("Codex", listed["codex"].DisplayName);
+        Assert.Equal("Antigravity", listed["agy"].DisplayName);
 
         // The BYO-endpoint types sign in with a Base URL and API key, not through a CLI.
         Assert.Null(listed["opencode"].CliAuth);
@@ -76,6 +77,10 @@ public class AgentAdaptersControllerTests
         var copilot = listed["copilot"].CliAuth!;
         Assert.Equal("GitHub Copilot", copilot.CliName);
         Assert.Contains("`/login`", copilot.SignInStep);
+
+        var agy = listed["agy"].CliAuth!;
+        Assert.Equal("Antigravity", agy.CliName);
+        Assert.Contains("Gemini API key", agy.SignInStep);
 
         var codex = listed["codex"].CliAuth!;
         Assert.Equal("Codex", codex.CliName);

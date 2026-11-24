@@ -242,6 +242,26 @@ public class AdapterGatewayTests
     }
 
     [Fact]
+    public void Antigravity_reports_the_gateway_path_only_when_the_provider_holds_a_gemini_key()
+    {
+        Assert.Equal(CredentialPath.Gateway, Adapter("agy").CredentialPathFor(Provider("agy")));
+        Assert.Null(Adapter("agy").CredentialPathFor(Provider("agy", null)));
+    }
+
+    [Fact]
+    public void Antigravity_gets_the_gemini_route_and_the_placeholder_as_its_key()
+    {
+        var psi = AgyAdapter.BuildRunProcessStartInfo("agy", Path.GetTempPath(), "hi", null);
+
+        var environment = new Dictionary<string, string?>();
+        AgyAdapter.ApplyGateway(environment, _lease);
+
+        Assert.Equal("http://127.0.0.1:8080/gateway/google", environment["AGY_LLM_GATEWAY_URL"]);
+        Assert.Equal(_lease.Token, environment["AGY_LLM_GATEWAY_API_KEY"]);
+        AssertHoldsNoSecret(psi, environment);
+    }
+
+    [Fact]
     public void Base_url_adapters_report_the_path_only_when_they_hold_a_credential()
     {
         var withUrl = "https://models.example.test/v1";
@@ -277,6 +297,7 @@ public class AdapterGatewayTests
     [Theory]
     [InlineData("Claude-Code")]
     [InlineData(" codex ")]
+    [InlineData("AGY")]
     public void The_route_follows_the_provider_type_whatever_its_case(string type)
         => Assert.NotNull(GatewayRoutes.RouteFor(type));
 
@@ -285,6 +306,7 @@ public class AdapterGatewayTests
         "claude-code" => new ClaudeCodeAdapter(),
         "codex" => new CodexAdapter(),
         "copilot" => new CopilotAdapter(),
+        "agy" => new AgyAdapter(),
         "opencode" => new OpenCodeAdapter(),
         _ => new PiAdapter(),
     };

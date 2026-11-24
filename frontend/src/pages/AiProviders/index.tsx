@@ -162,6 +162,10 @@ export default function AiProviders() {
   // which ILD keeps and the agent never sees. It is the one sign-in that also has a field.
   const takesLongLivedToken = type.toLowerCase() === "claude-code";
 
+  // Antigravity runs on a Gemini API key, which ILD keeps and the agent never sees.
+  const takesGeminiKey = type.toLowerCase() === "agy";
+  const takesApiKey = !cliAuth || takesLongLivedToken || takesGeminiKey;
+
   // What the selected type's adapter says about a model. Undefined means no
   // adapter declared anything.
   const modelSupport: AdapterModelSupport | undefined = adapterFor(type)?.modelSupport;
@@ -197,7 +201,7 @@ export default function AiProviders() {
     };
 
     // Send each persisted value whenever the selected type exposes its field
-    // (Custom MCP servers: opencode, claude-code, copilot, codex; Extra CLI arguments:
+    // (Custom MCP servers: opencode, claude-code, copilot, codex, agy; Extra CLI arguments:
     // those and pi). An empty string clears it. The server folds it into
     // AiProvider.Config, preserving any other stored keys. A type without the
     // field sends nothing for it, so that part of its config is left untouched.
@@ -210,12 +214,12 @@ export default function AiProviders() {
     setSaveError(null);
     try {
       if (editingProvider) {
-        if ((!cliAuth || takesLongLivedToken) && apiKey) {
+        if (takesApiKey && apiKey) {
           data.apiKey = apiKey;
         }
         await aiProviderService.update(editingProvider.id, data);
       } else {
-        data.apiKey = !cliAuth || takesLongLivedToken ? apiKey : "";
+        data.apiKey = takesApiKey ? apiKey : "";
         await aiProviderService.create(data);
       }
     } catch (error) {
@@ -300,9 +304,11 @@ export default function AiProviders() {
                   <span className="ap-value">{provider.model}</span>
                 </div>
               )}
-              {!cliAuthFor(provider.type) && (
+              {(!cliAuthFor(provider.type) || provider.type.toLowerCase() === "agy") && (
                 <div className="ap-field">
-                  <span className="ap-label">API Key</span>
+                  <span className="ap-label">
+                    {provider.type.toLowerCase() === "agy" ? "Gemini API key" : "API Key"}
+                  </span>
                   <span className="ap-value ap-masked">
                     {provider.apiKey ? "••••••••" : "(not set)"}
                   </span>
@@ -393,7 +399,14 @@ export default function AiProviders() {
                   it below.
                 </div>
               )}
-              {cliAuth && !takesLongLivedToken ? (
+              {takesGeminiKey && (
+                <div className="ap-cli-note">
+                  Antigravity runs on a Gemini API key that ILD keeps and the agent never sees.
+                  Create one in Google AI Studio and paste it below. Without it the provider cannot
+                  run.
+                </div>
+              )}
+              {cliAuth && !takesLongLivedToken && !takesGeminiKey ? (
                 <div className="ap-cli-note">
                   This provider type authenticates via the locally-installed {cliAuth.cliName} CLI.
                   The first time you set it up, save the provider and then use{" "}
@@ -434,10 +447,14 @@ export default function AiProviders() {
                   )}
                 </div>
               )}
-              {(!cliAuth || takesLongLivedToken) && (
+              {takesApiKey && (
                 <div className="form-group">
                   <label htmlFor="apApiKey">
-                    {takesLongLivedToken ? "Long-lived token (from claude setup-token)" : "API Key"}
+                    {takesLongLivedToken
+                      ? "Long-lived token (from claude setup-token)"
+                      : takesGeminiKey
+                        ? "Gemini API key"
+                        : "API Key"}
                   </label>
                   <input
                     id="apApiKey"

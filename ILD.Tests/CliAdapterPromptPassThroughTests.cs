@@ -98,6 +98,14 @@ public class CliAdapterPromptPassThroughTests
     }
 
     [Fact]
+    public async Task Agy_hands_the_prompt_to_the_agent_process_byte_for_byte()
+    {
+        using var cli = new PromptCapturingCli(turn: PromptCapturingCli.AgyTurn);
+
+        await AssertPromptReachesTheProcessAsync(new AgyAdapter(), "agy", cli);
+    }
+
+    [Fact]
     public async Task Pi_writes_the_prompt_to_the_agent_process_stdin_byte_for_byte()
     {
         // Pi is the one CLI that takes its turn on stdin rather than argv, so

@@ -23,7 +23,7 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 # Names may be nested (e.g. .config/opencode): opencode keeps its auth/state under
 # the XDG data dir, hence the .config/opencode + .local/share/opencode entries.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
-AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .codex .config/opencode .local/share/opencode}"
+AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .codex .gemini .config/opencode .local/share/opencode}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
 
 # Own a runtime directory (a volume mount point) by the runtime user. The whole
