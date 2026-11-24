@@ -16,9 +16,10 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 /// <summary>
 /// Runs Google's Antigravity CLI (<c>agy</c>) headless: <c>agy -p &lt;prompt&gt; --output-format stream-json</c>.
-/// It runs on a Gemini API key saved on the provider, which the agent never holds: the CLI is pointed at the
+/// With a Gemini API key saved on the provider the agent never holds it: the CLI is pointed at the
 /// model gateway (<c>AGY_LLM_GATEWAY_URL</c>) with the run's placeholder as its key, and the gateway adds the real
-/// one. <see cref="AiProvider.BaseUrl"/> is ignored. <see cref="AiProvider.Model"/> is passed as <c>--model</c>
+/// one. Without a key it uses the Google sign-in made in the provider terminal, a copy of which the run is given
+/// (the sign-in cannot go through the gateway, which speaks the Gemini API only). <see cref="AiProvider.BaseUrl"/> is ignored. <see cref="AiProvider.Model"/> is passed as <c>--model</c>
 /// when set; blank leaves the CLI's own default.
 ///
 /// A conversation is resumed with <c>--conversation &lt;id&gt;</c>. Its id is the <c>conversation_id</c> the stream
@@ -54,7 +55,17 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     public override AgentAdapterTraits Traits => TypeTraits;
 
     public override CredentialPath? CredentialPathFor(AiProvider provider)
-        => ModelCredentialSource.UpstreamKey(provider) is null ? null : CredentialPath.Gateway;
+        => ModelCredentialSource.UpstreamKey(provider) is null ? CredentialPath.ReadOnlyCopy : CredentialPath.Gateway;
+
+    /// <summary>The files, relative to the home, that the CLI keeps its Google sign-in in once it stores tokens in a file.</summary>
+    internal static readonly string[] LoginFiles =
+    [
+        ".gemini/antigravity-cli/jetski-standalone-oauth-token",
+        ".gemini/antigravity-cli/antigravity-oauth-token",
+    ];
+
+    /// <summary>Set, the CLI keeps its sign-in in a file instead of the OS keyring, which a run's home and the terminal's have none of.</summary>
+    public const string ForceFileTokenStorage = "AGY_CLI_FORCE_FILE_TOKEN_STORAGE";
 
     /// <summary>
     /// Points the CLI at the gateway's Gemini route. The lease's token is sent as the bearer key, which the
@@ -77,6 +88,8 @@ public sealed class AgyAdapter : CliAgentAdapterBase
     private sealed class Turn(AgyAdapter adapter, AgentExecutionContext ctx, string worktreePath, Lazy<ModelGatewayLease?> gateway) : CliAgentTurn
     {
         private readonly string _home = HomeFor(adapter, worktreePath);
+        private readonly bool _hasKey = ModelCredentialSource.UpstreamKey(ctx.Provider) is not null;
+        private bool _hasLogin;
         private string? _mcpConfigPath;
         private string? _mcpConfigBefore;
         private StreamResult? _stdout;
@@ -88,6 +101,8 @@ public sealed class AgyAdapter : CliAgentAdapterBase
 
         public override async Task PrepareAsync()
         {
+            if (!_hasKey) _hasLogin = await adapter.CopyStoredLoginAsync(_home, ctx.Cancel);
+
             var servers = BuildMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, adapter.RunFacingEnvironmentFor(ctx), ctx.NoTools);
             if (servers.Count == 0) return;
 
@@ -117,12 +132,14 @@ public sealed class AgyAdapter : CliAgentAdapterBase
         public override Task<AgentLaunch> LaunchAsync()
         {
             var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            if (gateway.Value is { } lease)
+            if (_hasKey)
             {
-                if (ModelCredentialSource.UpstreamKey(ctx.Provider) is null)
-                    throw Failed("[agy-error] this provider has no Gemini API key: save one on the AI Provider page, which the Antigravity CLI runs on.");
-                ApplyGateway(environment, lease);
+                if (gateway.Value is { } lease) ApplyGateway(environment, lease);
             }
+            else if (_hasLogin)
+                environment[ForceFileTokenStorage] = "1";
+            else if (gateway.Value is not null)
+                throw Failed("[agy-error] this provider has no Gemini API key and no Google sign-in: save a key on the AI Provider page, or use Open terminal to sign in.");
 
             var psi = BuildRunProcessStartInfo(
                 BinaryPath, worktreePath, ctx.Prompt, ResumeSessionId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model,
@@ -165,14 +182,14 @@ public sealed class AgyAdapter : CliAgentAdapterBase
          "--continue", "-c", "--add-dir", "--disable-slash-commands", "--settings", "--sandbox", "--mode", "--remote-agent", "--remote-control"];
 
     /// <summary>
-    /// Antigravity signs in with a Gemini API key kept on the provider, and its only tool is <c>ild</c>: its own
+    /// Antigravity runs on a Gemini API key kept on the provider or on the Google sign-in of its terminal, and its only tool is <c>ild</c>: its own
     /// tools cannot be turned off, so it takes no tool-less call, and an explicit selection without <c>ild</c> is
     /// how ILD is turned off. Declared after <see cref="ReservedCliFlags"/>, which it reads.
     /// </summary>
     internal static readonly AgentAdapterTraits TypeTraits = new()
     {
         DisplayName = "Antigravity",
-        CliAuth = new("Antigravity", "paste a Gemini API key in the provider's API Key field (the CLI is not signed in)"),
+        CliAuth = new("Antigravity", "sign in with your Google account (or leave it and save a Gemini API key on the provider)"),
         SupportedTools = AiToolCatalog.IldOnlyTools,
         EmptyToolSelectionMeansNone = true,
         SupportsNoTools = false,
@@ -230,6 +247,41 @@ public sealed class AgyAdapter : CliAgentAdapterBase
         psi.ArgumentList.Add("-p");
         psi.ArgumentList.Add(prompt);
         return psi;
+    }
+
+    /// <summary>
+    /// Gives a run in a home of its own a copy of the Google sign-in the provider terminal stored, which only ILD can read.
+    /// A run on this machine's own home already has it. False when there is no stored sign-in.
+    /// </summary>
+    private async Task<bool> CopyStoredLoginAsync(string runHome, CancellationToken ct)
+    {
+        var storeHome = EnvironmentVariables.Get("HOME") is { Length: > 0 } home ? home : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var found = false;
+        foreach (var relative in LoginFiles)
+        {
+            string text;
+            try
+            {
+                var path = Path.Combine(storeHome, relative);
+                var info = new FileInfo(path);
+                if (!info.Exists || info.LinkTarget is not null || info.Length is 0 or > CredentialImport.MaxBytes) continue;
+                text = await File.ReadAllTextAsync(path, ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Could not read the stored Antigravity sign-in {File}", relative);
+                continue;
+            }
+
+            found = true;
+            if (!string.Equals(runHome, storeHome, StringComparison.Ordinal))
+            {
+                var target = Path.Combine(runHome, relative);
+                await RunHost.CreateDirectoryAsync(Path.GetDirectoryName(target)!, ct);
+                await RunHost.WriteFileAsync(target, text, ct);
+            }
+        }
+        return found;
     }
 
     private static string HomeFor(AgyAdapter adapter, string worktreePath)

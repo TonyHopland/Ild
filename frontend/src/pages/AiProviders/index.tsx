@@ -402,8 +402,9 @@ export default function AiProviders() {
               {takesGeminiKey && (
                 <div className="ap-cli-note">
                   Antigravity runs on a Gemini API key that ILD keeps and the agent never sees.
-                  Create one in Google AI Studio and paste it below. Without it the provider cannot
-                  run.
+                  Create one in Google AI Studio and paste it below. Or leave the key blank, save
+                  the provider and use <strong>Open terminal</strong> to sign in with your Google
+                  account: runs then use a copy of that sign-in.
                 </div>
               )}
               {cliAuth && !takesLongLivedToken && !takesGeminiKey ? (

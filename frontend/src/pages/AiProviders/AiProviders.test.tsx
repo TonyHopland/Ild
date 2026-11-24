@@ -37,7 +37,8 @@ const DECLARED_CLI_AUTH: Record<string, { cliName: string; signInStep: string }>
   },
   agy: {
     cliName: "Antigravity",
-    signInStep: "paste a Gemini API key in the provider's API Key field (the CLI is not signed in)",
+    signInStep:
+      "sign in with your Google account (or leave it and save a Gemini API key on the provider)",
   },
 };
 
@@ -1772,11 +1773,11 @@ describe("an Antigravity provider", () => {
 
     expect(screen.queryByLabelText("Base URL")).toBeFalsy();
     expect(screen.queryByLabelText("API Key")).toBeFalsy();
-    expect(screen.queryByText(/Open terminal/)).toBeFalsy();
     expect(
       screen.getByText((_, element) =>
         element?.className === "ap-cli-note"
-          ? (element.textContent ?? "").includes("Google AI Studio")
+          ? (element.textContent ?? "").includes("Google AI Studio") &&
+            (element.textContent ?? "").includes("Open terminal")
           : false,
       ),
     ).toBeTruthy();

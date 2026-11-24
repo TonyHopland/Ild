@@ -80,7 +80,7 @@ public class AgentAdaptersControllerTests
 
         var agy = listed["agy"].CliAuth!;
         Assert.Equal("Antigravity", agy.CliName);
-        Assert.Contains("Gemini API key", agy.SignInStep);
+        Assert.Contains("Google account", agy.SignInStep);
 
         var codex = listed["codex"].CliAuth!;
         Assert.Equal("Codex", codex.CliName);

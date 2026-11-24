@@ -111,6 +111,7 @@ public sealed class InteractiveProviderSessionService
             var routed = _terminalCommands.RouteTerminalCommand(
                 binaryPath, extraArgs, provider.Id, await _egressPolicy.LaunchModeAsync(cancellationToken));
             var environment = new Dictionary<string, string>(routed.Environment) { ["HOME"] = throwawayHome };
+            if (provider.Type == "agy") environment[AgyAdapter.ForceFileTokenStorage] = "1";
 
             var options = new PtyOptions
             {

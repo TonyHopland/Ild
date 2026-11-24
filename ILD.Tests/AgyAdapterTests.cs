@@ -218,4 +218,27 @@ public class AgyAdapterTests
 
         Assert.False(result.Success);
     }
+
+    [Fact]
+    public async Task Without_a_key_the_turn_runs_on_the_stored_google_sign_in_and_keeps_the_token_in_a_file()
+    {
+        using var cli = new PromptCapturingCli(turn: "printf '%s' \"$AGY_CLI_FORCE_FILE_TOKEN_STORAGE\" > env-seen.txt\n" + SuccessTurn);
+        var home = Directory.CreateTempSubdirectory("ild-agy-home-").FullName;
+        try
+        {
+            var token = Path.Combine(home, AgyAdapter.LoginFiles[0]);
+            Directory.CreateDirectory(Path.GetDirectoryName(token)!);
+            File.WriteAllText(token, "token");
+            var environment = new TestProcessEnvironment { { "HOME", home } };
+
+            var result = await new AgyAdapter(environment: environment).ExecuteAsync(Context(cli));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal("1", File.ReadAllText(Path.Combine(cli.WorkDir, "env-seen.txt")));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
 }

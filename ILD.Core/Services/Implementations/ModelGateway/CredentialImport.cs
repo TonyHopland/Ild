@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Files;
 using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations.Adapters;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.ModelGateway;
@@ -16,7 +17,7 @@ public static class CredentialImport
     /// <summary>The most a login file may hold; a larger one is not kept.</summary>
     public const int MaxBytes = 256 * 1024;
 
-    private sealed record Login(string RelativePath, Func<JsonNode, bool> HoldsLogin, bool Jsonc = false);
+    private sealed record Login(string RelativePath, Func<JsonNode, bool> HoldsLogin, bool Jsonc = false, bool Json = true);
 
     private static readonly Login[] Logins =
     [
@@ -25,6 +26,7 @@ public static class CredentialImport
         new(".copilot/config.json", node => node["authTokens"] is JsonObject { Count: > 0 }, Jsonc: true),
         new(".pi/agent/auth.json", node => node is JsonObject { Count: > 0 }),
         new(".local/share/opencode/auth.json", node => node is JsonObject { Count: > 0 }),
+        .. AgyAdapter.LoginFiles.Select(file => new Login(file, _ => true, Json: false)),
     ];
 
     /// <returns>The files imported, relative to the home.</returns>
@@ -72,6 +74,7 @@ public static class CredentialImport
 
     private static bool Holds(Login login, string text)
     {
+        if (!login.Json) return !string.IsNullOrWhiteSpace(text);
         if (login.Jsonc)
             text = string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
         try { return JsonNode.Parse(text) is { } node && login.HoldsLogin(node); }

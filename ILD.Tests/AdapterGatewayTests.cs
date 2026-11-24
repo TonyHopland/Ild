@@ -242,10 +242,10 @@ public class AdapterGatewayTests
     }
 
     [Fact]
-    public void Antigravity_reports_the_gateway_path_only_when_the_provider_holds_a_gemini_key()
+    public void Antigravity_reports_the_gateway_path_with_a_gemini_key_and_a_login_copy_without_one()
     {
         Assert.Equal(CredentialPath.Gateway, Adapter("agy").CredentialPathFor(Provider("agy")));
-        Assert.Null(Adapter("agy").CredentialPathFor(Provider("agy", null)));
+        Assert.Equal(CredentialPath.ReadOnlyCopy, Adapter("agy").CredentialPathFor(Provider("agy", null)));
     }
 
     [Fact]

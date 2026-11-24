@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Api.Services;
 using ILD.Core.Services.Implementations.ModelGateway;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -36,6 +37,17 @@ public sealed class CredentialImportTests : IDisposable
         Assert.Contains("refreshToken", File.ReadAllText(stored));
         if (!OperatingSystem.IsWindows())
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(stored));
+    }
+
+    [Theory]
+    [InlineData(".gemini/antigravity-cli/jetski-standalone-oauth-token")]
+    [InlineData(".gemini/antigravity-cli/antigravity-oauth-token")]
+    public async Task An_antigravity_sign_in_is_imported_whatever_form_its_file_takes(string file)
+    {
+        Put(Throwaway, file, "opaque-token-bytes");
+
+        Assert.Equal([file], await ImportAsync());
+        Assert.Equal("opaque-token-bytes", File.ReadAllText(Path.Combine(Store, file)));
     }
 
     [Fact]
@@ -89,7 +101,7 @@ public sealed class CredentialImportTests : IDisposable
         }, Store, NullLogger.Instance, TestContext.Current.CancellationToken);
 
         Assert.Equal([".claude/.credentials.json"], imported);
-        Assert.Equal(5, asked.Count);
+        Assert.Equal(5 + AgyAdapter.LoginFiles.Length, asked.Count);
         Assert.True(File.Exists(Path.Combine(Store, ".claude", ".credentials.json")));
         Assert.False(File.Exists(Path.Combine(Store, ".codex", "auth.json")));
     }
