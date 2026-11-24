@@ -1009,7 +1009,7 @@ note "via model gateway", one line per request. In `whitelist` mode an upstream 
 `blacklist` mode a listed one is, and the CLI gets an error that names the host and says the network policy refused it. The
 upstream is your own provider configuration, so it is exempt from the protected destinations, like a declared forward: a local
 model on a LAN address keeps working while `private` is on. So that `whitelist` mode does not stop the models, ILD adds a
-whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`,
+whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`, `generativelanguage.googleapis.com`,
 `api.github.com` and `.githubcopilot.com`, or the host of an upstream provider's base URL) when the provider is created or its
 base URL or type changes, and the first start after an upgrade adds them for the providers that exist. They are ordinary
 provider-scoped entries in Settings → Network: delete one and that provider's model calls are refused in `whitelist` mode. The

@@ -303,6 +303,49 @@ public class ModelGatewayTests : IAsyncLifetime
         Assert.Equal("Bearer " + RealKey, proxyRequest.Headers.Authorization?.ToString());
     }
 
+    [Theory]
+    [InlineData("v1beta/models", "https://generativelanguage.googleapis.com/v1beta/models")]
+    [InlineData("v1/models", "https://generativelanguage.googleapis.com/v1/models")]
+    [InlineData("v1beta/models/gemini-3.1-pro-preview:streamGenerateContent", "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent")]
+    public void An_antigravity_call_is_forwarded_to_the_gemini_host(string rest, string expected)
+    {
+        Assert.True(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://" + GatewayRoutes.GoogleHost), GatewayRoutes.Google, rest, new QueryString("?alt=sse"), out var target, out var withCredential));
+
+        Assert.Equal(expected + "?alt=sse", target.ToString());
+        Assert.True(withCredential);
+    }
+
+    [Theory]
+    [InlineData("v1beta/files")]
+    [InlineData("v1beta/tunedModels")]
+    [InlineData("v1beta/cachedContents")]
+    [InlineData("v1beta/modelsX")]
+    [InlineData("v1beta/models/../files")]
+    public void A_gemini_path_outside_the_models_is_refused(string rest)
+    {
+        Assert.False(ILD.Api.Middleware.ModelGatewayMiddleware.TryBuildTarget(
+            new Uri("https://" + GatewayRoutes.GoogleHost), GatewayRoutes.Google, rest, default, out _, out _));
+    }
+
+    [Fact]
+    public async Task A_gemini_request_carries_the_real_key_in_the_gemini_header_and_no_bearer()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Headers.Authorization = "Bearer ildgw_placeholder";
+        context.Request.Headers["x-goog-api-key"] = "ildgw_placeholder";
+        var target = new Uri("https://generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent");
+        using var proxyRequest = new HttpRequestMessage(HttpMethod.Post, target);
+        var credential = new ModelCredential(new Uri("https://generativelanguage.googleapis.com"), RealKey, ModelCredential.NoHeaders, GatewayRoutes.GoogleKeyHeader);
+
+        await new ILD.Api.Middleware.ModelGatewayMiddleware.SwapTransformer(target, credential, rewriteEndpointsTo: null)
+            .TransformRequestAsync(context, proxyRequest, "https://generativelanguage.googleapis.com", TestContext.Current.CancellationToken);
+
+        Assert.Null(proxyRequest.Headers.Authorization);
+        Assert.Equal(RealKey, Assert.Single(proxyRequest.Headers.GetValues("x-goog-api-key")));
+    }
+
     [Fact]
     public async Task A_provider_without_a_key_is_forwarded_with_no_credential_at_all()
     {

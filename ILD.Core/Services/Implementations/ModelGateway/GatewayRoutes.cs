@@ -16,10 +16,15 @@ public static class GatewayRoutes
     public const string ChatGpt = "chatgpt";
     public const string GitHub = "github";
     public const string Upstream = "upstream";
+    public const string Google = "google";
 
     public const string AnthropicHost = "api.anthropic.com";
     public const string GitHubApiHost = "api.github.com";
     public const string ChatGptHost = "chatgpt.com";
+    public const string GoogleHost = "generativelanguage.googleapis.com";
+
+    /// <summary>The header the Gemini API takes its key in.</summary>
+    public const string GoogleKeyHeader = "x-goog-api-key";
 
     /// <summary>The route a provider type's CLI talks to the gateway on, or null for a type that does not use the gateway.</summary>
     public static string? RouteFor(string providerType) => providerType.Trim().ToLowerInvariant() switch
@@ -28,6 +33,7 @@ public static class GatewayRoutes
         "codex" => ChatGpt,
         "copilot" => GitHub,
         "opencode" or "pi" => Upstream,
+        "agy" => Google,
         _ => null,
     };
 
@@ -40,6 +46,7 @@ public static class GatewayRoutes
         Anthropic => [AnthropicHost],
         ChatGpt => [ChatGptHost, "api.openai.com", "auth.openai.com"],
         GitHub => [".githubcopilot.com"],
+        Google => [GoogleHost],
         Upstream when Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var uri) => [uri.Host],
         _ => [],
     };
@@ -53,6 +60,7 @@ public static class GatewayRoutes
         Anthropic => [AnthropicHost],
         ChatGpt => [ChatGptHost],
         GitHub => [GitHubApiHost, ".githubcopilot.com"],
+        Google => [GoogleHost],
         Upstream when Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var uri) => [EgressRules.NormalizeHost(uri.Host)],
         _ => [],
     };

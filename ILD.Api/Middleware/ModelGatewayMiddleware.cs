@@ -206,6 +206,8 @@ public sealed partial class ModelGatewayMiddleware
         // wham/usage is the Codex CLI's rate-limit check; the rest of wham/ is the user's Codex cloud tasks.
         [GatewayRoutes.ChatGpt] = ["codex/", "wham/usage"],
         [GatewayRoutes.Anthropic] = ["v1/messages", "v1/messages/count_tokens", "v1/models", "v1/models/"],
+        // The Antigravity CLI lists the models, then calls one with :streamGenerateContent.
+        [GatewayRoutes.Google] = ["v1beta/models", "v1beta/models/", "v1/models", "v1/models/"],
         [GatewayRoutes.Upstream] =
             ["chat/completions", "completions", "responses", "messages", "messages/count_tokens", "models", "models/"],
     };
@@ -282,6 +284,14 @@ public sealed partial class ModelGatewayMiddleware
             if (credential?.Secret is not { } secret)
             {
                 foreach (var name in CredentialHeaders) proxyRequest.Headers.Remove(name);
+                return;
+            }
+
+            if (credential.KeyHeader is { } keyHeader)
+            {
+                foreach (var name in CredentialHeaders) proxyRequest.Headers.Remove(name);
+                proxyRequest.Headers.Remove(keyHeader);
+                proxyRequest.Headers.TryAddWithoutValidation(keyHeader, secret);
                 return;
             }
 
