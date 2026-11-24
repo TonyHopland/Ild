@@ -160,9 +160,11 @@ public static class RunToolStore
     public static IReadOnlyList<string> Arguments(IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents)
     {
         var arguments = new List<string>();
-        if (agents.Count > 0) arguments.Add($"agentnode={AgentNode}");
+        if (agents.Any(a => a.Archive is null)) arguments.Add($"agentnode={AgentNode}");
         arguments.AddRange(tools.Select(t => $"tool={t}"));
-        arguments.AddRange(agents.Select(a => $"agent={a.Agent.Key}|{a.Agent.NpmPackage}|{a.Version}|{a.Agent.BinaryName}"));
+        arguments.AddRange(agents.Select(a => a.Archive is { } archive
+            ? $"agent={a.Agent.Key}|{archive.Url}|{a.Version}|{a.Agent.BinaryName}|{archive.Sha512}|{a.Agent.Release!.ArchiveEntry}"
+            : $"agent={a.Agent.Key}|{a.Agent.NpmPackage}|{a.Version}|{a.Agent.BinaryName}"));
         return arguments;
     }
 
@@ -254,21 +256,32 @@ public static class RunToolStore
           fi
         }
 
-        # Installs an agent CLI once, at an exact version, with a wrapper that starts it on the agents' Node.
+        # Installs an agent CLI once, at an exact version, with a wrapper that starts it on the agents' Node, or, for an
+        # agent shipped as a release archive (its address in place of the package), a wrapper that starts the binary.
         ensure_agent() {
-          local key="$1" package="$2" version="$3" bin="$4" dir target
+          local key="$1" package="$2" version="$3" bin="$4" sha512="${5:-}" entry="${6:-}" dir target
           dir="$root/agents/$key/$version"
           if [ ! -e "$dir/.ild-complete" ]; then
             mkdir -p "$root/agents/$key"
             exec 9>"$root/agents/$key/$version.lock"; flock 9
             if [ ! -e "$dir/.ild-complete" ]; then
               rm -rf "$dir"; mkdir -p "$dir/wrap"
-              # npm runs only the install scripts its package.json approves: the agent's own, nothing it depends on.
-              printf '{"allowScripts":{"%s":true}}' "$package" > "$dir/package.json"
-              (cd "$dir" && PATH="$agent_node:$base_path" npm install "$package@$version" --prefix "$dir" \
-                --ignore-scripts=false --no-audit --no-fund --no-package-lock) >&2
-              target="$(readlink -f "$dir/node_modules/.bin/$bin")"
-              if head -n1 "$target" | grep -q '^#!.*node'; then
+              if [ -n "$sha512" ]; then
+                mkdir -p "$dir/release"
+                curl -fsSL -o "$dir/release.tar.gz" "$package" >&2
+                printf '%s  %s\n' "$sha512" "$dir/release.tar.gz" | sha512sum -c - >&2
+                tar -xzf "$dir/release.tar.gz" -C "$dir/release" "$entry" >&2
+                rm -f "$dir/release.tar.gz"
+                target="$dir/release/$entry"
+                chmod 0755 "$target"
+              else
+                # npm runs only the install scripts its package.json approves: the agent's own, nothing it depends on.
+                printf '{"allowScripts":{"%s":true}}' "$package" > "$dir/package.json"
+                (cd "$dir" && PATH="$agent_node:$base_path" npm install "$package@$version" --prefix "$dir" \
+                  --ignore-scripts=false --no-audit --no-fund --no-package-lock) >&2
+                target="$(readlink -f "$dir/node_modules/.bin/$bin")"
+              fi
+              if [ -z "$sha512" ] && head -n1 "$target" | grep -q '^#!.*node'; then
                 printf '#!/bin/sh\nexec "%s/node" "%s" "$@"\n' "$agent_node" "$target" > "$dir/wrap/$bin"
               else
                 printf '#!/bin/sh\nexec "%s" "$@"\n' "$target" > "$dir/wrap/$bin"
@@ -286,7 +299,7 @@ public static class RunToolStore
           case "$arg" in
             agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")"; jq -c '. + {kind: "agentnode"}' "$(manifest_for "$spec")" ;;
             tool=*) spec="${arg#tool=}"; ensure_tool "$spec"; jq -c '. + {kind: "tool"}' "$(manifest_for "$spec")" ;;
-            agent=*) IFS='|' read -r key package version bin <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" ;;
+            agent=*) IFS='|' read -r key package version bin sha512 entry <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" "$sha512" "$entry" ;;
           esac
         done
         """;

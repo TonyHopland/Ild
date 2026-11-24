@@ -6,25 +6,35 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// </summary>
 /// <param name="Key">Stable url-safe identifier used in API routes and on-disk paths.</param>
 /// <param name="DisplayName">Human-facing name shown in the UI.</param>
-/// <param name="NpmPackage">npm package installed to provide the binary.</param>
-/// <param name="BinaryName">Executable dropped into the package's <c>node_modules/.bin</c>.</param>
+/// <param name="NpmPackage">npm package installed to provide the binary; null for an agent that is downloaded as a release (<paramref name="Release"/>).</param>
+/// <param name="BinaryName">Executable dropped into the package's <c>node_modules/.bin</c>, or into the release install's <c>bin</c>.</param>
 /// <param name="Command">
 /// Fallback command used to launch the agent when no <c>/data</c> install is
 /// present — the bare name, resolved against <c>PATH</c>. Agents are no longer
 /// baked into the image, so this resolves only if one was installed separately;
 /// otherwise the launch fails until the user installs it from the AI Provider page.
 /// </param>
+/// <param name="Release">Where a downloaded binary comes from, for an agent that is not an npm package.</param>
 public sealed record ManagedAgent(
     string Key,
     string DisplayName,
-    string NpmPackage,
+    string? NpmPackage,
     string BinaryName,
-    string Command);
+    string Command,
+    AgentRelease? Release = null);
 
 /// <summary>
-/// The set of coding agents ILD manages via npm. Pi, OpenCode, Claude Code,
-/// GitHub Copilot and Codex are each installed from an npm package so a single update
-/// mechanism (no <c>curl</c> dependency) covers all of them. They are not baked
+/// Where an agent shipped as a binary is downloaded from: a JSON manifest per platform that names the latest
+/// <c>version</c>, the archive's <c>url</c> and its <c>sha512</c>.
+/// </summary>
+/// <param name="ManifestUrl">The manifest's URL, with <c>{platform}</c> standing for the platform name (<c>linux_amd64</c>, <c>darwin_arm64</c>).</param>
+/// <param name="ArchiveEntry">The executable's name inside the <c>.tar.gz</c> archive.</param>
+public sealed record AgentRelease(string ManifestUrl, string ArchiveEntry);
+
+/// <summary>
+/// The set of coding agents ILD manages. Pi, OpenCode, Claude Code, GitHub Copilot and
+/// Codex are each installed from an npm package; the Antigravity CLI is a binary downloaded
+/// from its release manifest. They are not baked
 /// into the image: installs land on <c>/data</c> and are launched from there, so
 /// a fresh deployment installs them once from the AI Provider page.
 /// </summary>
@@ -45,7 +55,11 @@ public static class ManagedAgentCatalog
     public static readonly ManagedAgent Codex =
         new("codex", "Codex", "@openai/codex", "codex", "codex");
 
-    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode, Copilot, Codex];
+    public static readonly ManagedAgent Agy =
+        new("agy", "Antigravity CLI", null, "agy", "agy",
+            new AgentRelease("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json", "antigravity"));
+
+    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode, Copilot, Codex, Agy];
 
     /// <summary>Look up a managed agent by its <see cref="ManagedAgent.Key"/> (case-insensitive); null when unknown.</summary>
     public static ManagedAgent? Find(string? key)
@@ -55,7 +69,7 @@ public static class ManagedAgentCatalog
 /// <summary>
 /// On-disk layout and launch-path resolution for <see cref="ManagedAgent"/>
 /// installs under the persistent data volume. Each agent lives at
-/// <c>{dataRoot}/agents/{key}/</c> with one or more npm installs under
+/// <c>{dataRoot}/agents/{key}/</c> with one or more installs (npm, or a downloaded release) under
 /// <c>versions/{versionId}/</c> and a plain-text <c>current</c> pointer file
 /// naming the active version. Swapping the active version is a single atomic
 /// rename of the pointer file, so a half-finished install never breaks the live
@@ -98,7 +112,12 @@ public static class ManagedAgentInstall
 
     /// <summary>The agent binary inside a given install directory.</summary>
     public static string BinaryIn(string versionDir, ManagedAgent agent)
-        => Path.Combine(versionDir, "node_modules", ".bin", agent.BinaryName);
+        => agent.Release is null
+            ? Path.Combine(versionDir, "node_modules", ".bin", agent.BinaryName)
+            : Path.Combine(versionDir, "bin", agent.BinaryName);
+
+    /// <summary>The file a release install records its version and archive in, which the run toolchain store installs from.</summary>
+    public static string ReleaseRecordIn(string versionDir) => Path.Combine(versionDir, "release.json");
 
     /// <summary>
     /// The active version id named by the pointer file, or null when no pointer

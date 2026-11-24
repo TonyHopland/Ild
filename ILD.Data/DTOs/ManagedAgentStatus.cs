@@ -9,9 +9,9 @@ namespace ILD.Data.DTOs;
 /// </summary>
 /// <param name="Key">Stable identifier (e.g. <c>pi</c>, <c>opencode</c>).</param>
 /// <param name="DisplayName">Human-facing name.</param>
-/// <param name="NpmPackage">npm package the agent is installed from.</param>
+/// <param name="NpmPackage">npm package the agent is installed from; null for an agent downloaded as a release.</param>
 /// <param name="InstalledVersion">Currently installed version, or null when not installed/unreadable.</param>
-/// <param name="LatestVersion">Latest version on the npm registry, or null when the lookup failed.</param>
+/// <param name="LatestVersion">Latest published version, or null when the lookup failed.</param>
 /// <param name="UpdateAvailable">
 /// True when an install or update is actionable: the latest version is known and
 /// either nothing is installed yet or the installed version is behind.
@@ -26,7 +26,7 @@ namespace ILD.Data.DTOs;
 public sealed record ManagedAgentStatus(
     string Key,
     string DisplayName,
-    string NpmPackage,
+    string? NpmPackage,
     string? InstalledVersion,
     string? LatestVersion,
     bool UpdateAvailable,

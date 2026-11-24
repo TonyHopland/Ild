@@ -56,7 +56,7 @@ public sealed class ManagedAgentRollbackTests : IDisposable
                 var prefix = args[args.ToList().IndexOf("--prefix") + 1];
                 Directory.CreateDirectory(Path.Combine(prefix, "node_modules", ".bin"));
                 File.WriteAllText(Path.Combine(prefix, "node_modules", ".bin", "pi"), "#!/bin/sh\n");
-                var manifestDir = Path.Combine(prefix, "node_modules", ManagedAgentCatalog.Pi.NpmPackage);
+                var manifestDir = Path.Combine(prefix, "node_modules", ManagedAgentCatalog.Pi.NpmPackage!);
                 Directory.CreateDirectory(manifestDir);
                 File.WriteAllText(Path.Combine(manifestDir, "package.json"), "{\"version\":\"" + (version == "latest" ? LatestVersion : version) + "\"}");
                 return Task.FromResult(new ProcessResult(0, "added 1 package", ""));
@@ -64,7 +64,7 @@ public sealed class ManagedAgentRollbackTests : IDisposable
 
             // A binary reports the version of the install it lives in.
             var binDir = Path.GetDirectoryName(fileName);
-            var manifest = binDir is null ? null : Path.Combine(binDir, "..", ManagedAgentCatalog.Pi.NpmPackage, "package.json");
+            var manifest = binDir is null ? null : Path.Combine(binDir, "..", ManagedAgentCatalog.Pi.NpmPackage!, "package.json");
             if (manifest is null || !File.Exists(manifest)) return Task.FromResult(new ProcessResult(127, "", "command not found"));
             var text = File.ReadAllText(manifest);
             return Task.FromResult(new ProcessResult(0, System.Text.Json.JsonDocument.Parse(text).RootElement.GetProperty("version").GetString() + "\n", ""));
@@ -285,7 +285,7 @@ public sealed class ManagedAgentRollbackTests : IDisposable
         await InstallAsync("1.0.0");
         var first = Active()!;
         await InstallAsync("2.0.0");
-        File.Delete(Path.Combine(ManagedAgentInstall.VersionDir(_dataRoot, _agent, first), "node_modules", _agent.NpmPackage, "package.json"));
+        File.Delete(Path.Combine(ManagedAgentInstall.VersionDir(_dataRoot, _agent, first), "node_modules", _agent.NpmPackage!, "package.json"));
 
         await _service.RemoveOldVersionsWhenIdleAsync(_agent.Key, _ct);
 

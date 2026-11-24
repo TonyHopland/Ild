@@ -148,7 +148,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
         var versions = string.Join(",", releases.Select(r => $"\"{r.Version}\":{{}}"));
         var packument = "{\"dist-tags\":{\"latest\":\"" + latest + "\"},\"versions\":{" + versions + "},\"time\":{\"created\":\"" + Iso(TimeSpan.FromDays(900))
             + "\",\"modified\":\"" + Iso(TimeSpan.FromHours(1)) + "\"," + time + "}}";
-        _registry.Packages[agent.NpmPackage] = (latest, packument);
+        _registry.Packages[agent.NpmPackage!] = (latest, packument);
     }
 
     /// <summary>One wake, an hour after the previous one, as the hosted service wakes.</summary>
@@ -204,7 +204,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
     public async Task Missing_agents_are_never_installed_by_the_pass()
     {
         UseCooldown(0);
-        foreach (var agent in ManagedAgentCatalog.All)
+        foreach (var agent in ManagedAgentCatalog.All.Where(a => a.NpmPackage is not null))
             Publish(agent, "2.0.0", ("2.0.0", 30));
 
         await PassAsync();
@@ -239,7 +239,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
         _npm.Installed[OpenCode.BinaryName] = "1.0.0";
         Publish(Pi, "2.0.0", ("2.0.0", 5));
         Publish(OpenCode, "2.0.0", ("2.0.0", 5));
-        _npm.FailingPackages.Add(Pi.NpmPackage);
+        _npm.FailingPackages.Add(Pi.NpmPackage!);
 
         await PassAsync();
 
@@ -256,7 +256,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
     {
         UseCooldown(0);
         _npm.Installed[Pi.BinaryName] = "1.0.0";
-        _registry.Packages[Pi.NpmPackage] = ("2.0.0", "{\"dist-tags\":{\"latest\":\"2.0.0\"}}");
+        _registry.Packages[Pi.NpmPackage!] = ("2.0.0", "{\"dist-tags\":{\"latest\":\"2.0.0\"}}");
 
         await PassAsync();
 
@@ -461,7 +461,7 @@ public sealed class ManagedAgentAutoUpdaterTests : IDisposable
         Assert.Equal(3, Directory.GetDirectories(versions).Length);
         lease!.Dispose();
         Publish(Pi, "4.0.0", ("1.0.0", 60), ("4.0.0", 5));
-        _npm.FailingPackages.Add(Pi.NpmPackage);
+        _npm.FailingPackages.Add(Pi.NpmPackage!);
 
         await PassAsync();
 

@@ -161,6 +161,9 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         var agent = ManagedAgentCatalog.Find(agentKey)
             ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
 
+        // A release manifest names only the newest build and no publish date, so no cooldown can be honoured.
+        if (agent.NpmPackage is null) return null;
+
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -238,7 +241,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
             // Switched in at once, in use or not: a running process keeps the install it was
             // launched from, and only new launches follow the pointer.
-            SwapIn(agent, await InstallToVersionDirAsync(agent, $"{agent.NpmPackage}@{version}", ct));
+            SwapIn(agent, await InstallToVersionDirAsync(agent, version, ct));
             if (ReadHeld(agent) is { } held && IsNewer(version, held))
                 TryDeleteFile(ManagedAgentInstall.HeldFile(_dataRoot, agent));
             return AutoUpdateResult.Installed;
@@ -278,7 +281,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
     private async Task InstallLatestAsync(ManagedAgent agent, CancellationToken ct)
     {
-        var versionId = await InstallToVersionDirAsync(agent, $"{agent.NpmPackage}@latest", ct);
+        var versionId = await InstallToVersionDirAsync(agent, "latest", ct);
         SwapIn(agent, versionId);
     }
 
@@ -350,14 +353,17 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             : null;
 
     /// <summary>
-    /// The version npm recorded when it installed <paramref name="versionId"/>, read from the
-    /// package's own manifest so it needs no process and works for an install that cannot start.
+    /// The version recorded when <paramref name="versionId"/> was installed, read from the package's own
+    /// manifest (or a release install's record) so it needs no process and works for an install that cannot start.
     /// </summary>
     private string? InstalledVersionIn(ManagedAgent agent, string versionId)
     {
         try
         {
-            var manifest = Path.Combine(ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId), "node_modules", agent.NpmPackage, "package.json");
+            var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
+            var manifest = agent.NpmPackage is { } package
+                ? Path.Combine(versionDir, "node_modules", package, "package.json")
+                : ManagedAgentInstall.ReleaseRecordIn(versionDir);
             if (!File.Exists(manifest)) return null;
             using var doc = JsonDocument.Parse(File.ReadAllText(manifest));
             return doc.RootElement.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String
@@ -390,11 +396,11 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     }
 
     /// <summary>
-    /// Installs <paramref name="spec"/> into a fresh version dir, closed to the agent for writes,
-    /// and returns its id. The pointer is not touched; a failed or cancelled install leaves
-    /// nothing behind.
+    /// Installs <paramref name="version"/> (an exact version, or <c>latest</c>) into a fresh version dir,
+    /// closed to the agent for writes, and returns its id. The pointer is not touched; a failed or
+    /// cancelled install leaves nothing behind.
     /// </summary>
-    private async Task<string> InstallToVersionDirAsync(ManagedAgent agent, string spec, CancellationToken ct)
+    private async Task<string> InstallToVersionDirAsync(ManagedAgent agent, string version, CancellationToken ct)
     {
         var versionId = Guid.NewGuid().ToString("N");
         var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
@@ -402,13 +408,31 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
         try
         {
+            if (agent.Release is { } release)
+            {
+                using var releaseTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                releaseTimeout.CancelAfter(InstallTimeout);
+                try
+                {
+                    await InstallReleaseAsync(agent, release, version, versionDir, releaseTimeout.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new InvalidOperationException($"The download of {agent.DisplayName} {version} timed out.");
+                }
+                _logger?.LogInformation("Installed managed agent {Agent} version dir {VersionId} from its release", agent.Key, versionId);
+                return versionId;
+            }
+
+            var package = agent.NpmPackage ?? throw new InvalidOperationException($"{agent.DisplayName} has neither an npm package nor a release.");
+            var spec = $"{package}@{version}";
             // npm 12 skips dependency install scripts unless the project's
             // package.json approves them, and the agent CLIs need their own
             // postinstall to work. Approve exactly the agent package, nothing
             // it depends on.
             File.WriteAllText(
                 Path.Combine(versionDir, "package.json"),
-                JsonSerializer.Serialize(new { allowScripts = new Dictionary<string, bool> { [agent.NpmPackage] = true } }));
+                JsonSerializer.Serialize(new { allowScripts = new Dictionary<string, bool> { [package] = true } }));
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(InstallTimeout);
@@ -554,6 +578,27 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
     private async Task<(string? Version, string? Error)> GetLatestVersionAsync(ManagedAgent agent, CancellationToken ct)
     {
+        if (agent.Release is { } release)
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(VersionLookupTimeout);
+                return (await ReadReleaseManifestAsync(release, cts.Token)).Version is { } version
+                    ? (version, null)
+                    : (null, $"The {agent.DisplayName} release manifest did not name a version.");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to fetch latest version for {Agent}", agent.Key);
+                return (null, $"Could not reach the {agent.DisplayName} release server: {ex.Message}");
+            }
+        }
+
         // The registry serves the latest dist-tag manifest at /{pkg}/latest; its
         // `version` field is the newest published version.
         var url = $"{RegistryBase}/{agent.NpmPackage}/latest";

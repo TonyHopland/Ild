@@ -162,6 +162,49 @@ public sealed class RunToolStoreScriptTests : IDisposable
         var wrapper = File.ReadAllText(Path.Combine(wrap, "pi"));
         Assert.Contains($"exec \"{Root}/mise/installs/node/24.0/bin/node\" \"{Root}/agents/pi/1.5.0/node_modules/pkg/cli.js\"", wrapper);
     }
+    private string ReleaseArchive(string entry, string content)
+    {
+        var source = Directory.CreateDirectory(Path.Combine(_dir, "release-src")).FullName;
+        File.WriteAllText(Path.Combine(source, entry), content);
+        var archive = Path.Combine(_dir, "release.tar.gz");
+        using var tar = Process.Start(new ProcessStartInfo("tar", ["-czf", archive, "-C", source, entry]))!;
+        tar.WaitForExit();
+        return archive;
+    }
+
+    [Fact]
+    public void A_release_agent_is_downloaded_checked_against_its_checksum_and_wrapped_without_the_agents_node()
+    {
+        var archive = ReleaseArchive("antigravity", "#!/bin/sh\necho agy\n");
+        var sha512 = Convert.ToHexStringLower(System.Security.Cryptography.SHA512.HashData(File.ReadAllBytes(archive)));
+        var argument = $"agent=agy|file://{archive}|1.5.16|agy|{sha512}|antigravity";
+
+        var first = Run(argument);
+        var second = Run(argument);
+
+        Assert.True(first.ExitCode == 0, first.StdErr);
+        Assert.Equal(first.StdOut, second.StdOut);
+        var line = JsonNode.Parse(first.StdOut.Trim())!;
+        Assert.Equal("agent", line["kind"]!.GetValue<string>());
+        var wrap = Path.Combine(Root, "agents", "agy", "1.5.16", "wrap");
+        Assert.Equal([wrap], line["path"]!.AsArray().Select(p => p!.GetValue<string>()));
+        Assert.Contains($"exec \"{Root}/agents/agy/1.5.16/release/antigravity\"", File.ReadAllText(Path.Combine(wrap, "agy")));
+        Assert.Empty(Installs());
+    }
+
+    [Fact]
+    public void A_release_that_does_not_match_its_checksum_is_not_installed()
+    {
+        var archive = ReleaseArchive("antigravity", "#!/bin/sh\n");
+
+        var result = Run($"agent=agy|file://{archive}|1.5.16|agy|{new string('0', 128)}|antigravity");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Equal("", result.StdOut.Trim());
+        Assert.False(File.Exists(Path.Combine(Root, "agents", "agy", "1.5.16", ".ild-complete")));
+        Assert.False(File.Exists(Path.Combine(Root, "agents", "agy", "1.5.16", "wrap", "agy")));
+    }
+
     private static string[] PathOf(string stdout) => JsonNode.Parse(stdout.Trim())!["path"]!.AsArray().Select(p => p!.GetValue<string>()).ToArray();
 
     [Fact]
