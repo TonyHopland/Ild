@@ -15,6 +15,7 @@ const DECLARED_MODEL_SUPPORT: Record<string, AdapterModelSupport> = {
   "claude-code": "Optional",
   copilot: "Optional",
   codex: "Optional",
+  agy: "Optional",
 };
 
 // How each CLI-auth adapter's CLI signs in, mirroring the real backend's
@@ -34,6 +35,11 @@ const DECLARED_CLI_AUTH: Record<string, { cliName: string; signInStep: string }>
     cliName: "Codex",
     signInStep: "choose **Sign in with Device Code** and sign in with your ChatGPT account",
   },
+  agy: {
+    cliName: "Antigravity",
+    signInStep:
+      "sign in with your Google account (or leave it and save a Gemini API key on the provider)",
+  },
 };
 
 const DECLARED_DISPLAY_NAME: Record<string, string> = {
@@ -42,6 +48,7 @@ const DECLARED_DISPLAY_NAME: Record<string, string> = {
   "claude-code": "Claude Code",
   copilot: "Copilot",
   codex: "Codex",
+  agy: "Antigravity",
 };
 
 /** The `GET /AgentAdapters` payload for a set of provider types. */
@@ -1745,6 +1752,53 @@ describe("a Codex provider", () => {
     expect(body.model).toBe("gpt-5.5");
     expect(body.customMcpServersJson).toBe('{"docs":{"command":["npx","docs-mcp"]}}');
     expect(body.extraArgs).toBe('-c model_reasoning_effort="high"');
+  });
+});
+
+describe("an Antigravity provider", () => {
+  test("takes a Gemini API key and no Base URL, and saves the key it was given", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        types: ["opencode", "pi", "claude-code", "copilot", "codex", "agy"],
+        schema: customMcpSchema,
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+    fireEvent.click(screen.getByText("+ New Provider"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Antigravity" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "agy" } });
+
+    expect(screen.queryByLabelText("Base URL")).toBeFalsy();
+    expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    expect(
+      screen.getByText((_, element) =>
+        element?.className === "ap-cli-note"
+          ? (element.textContent ?? "").includes("Google AI Studio") &&
+            (element.textContent ?? "").includes("Open terminal")
+          : false,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Gemini API key"), { target: { value: "gemini-key" } });
+    fireEvent.change(screen.getByLabelText("Model (optional)"), {
+      target: { value: "gemini-3-flash-preview" },
+    });
+    fireEvent.click(screen.getByText("Create"));
+
+    await waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url.includes("/aiproviders"))).toBe(
+        true,
+      ),
+    );
+    const body = requests.find((r) => r.method === "POST" && r.url.includes("/aiproviders"))!
+      .body as Record<string, unknown>;
+    expect(body.type).toBe("agy");
+    expect(body.baseUrl).toBe("");
+    expect(body.apiKey).toBe("gemini-key");
+    expect(body.model).toBe("gemini-3-flash-preview");
   });
 });
 

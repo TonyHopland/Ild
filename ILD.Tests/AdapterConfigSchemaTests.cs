@@ -28,6 +28,7 @@ public class AdapterConfigSchemaTests
     [InlineData("claude-code", new[] { "customMcpServersJson", "extraArgs" })]
     [InlineData("copilot", new[] { "customMcpServersJson", "extraArgs" })]
     [InlineData("codex", new[] { "customMcpServersJson", "extraArgs" })]
+    [InlineData("agy", new[] { "customMcpServersJson", "extraArgs" })]
     [InlineData("opencode", new[] { "customMcpServersJson", "extraArgs" })]
     [InlineData("pi", new[] { "extraArgs" })]
     public void Every_agent_adapter_offers_extra_cli_arguments_and_only_the_mcp_capable_ones_custom_mcp_servers(
@@ -38,6 +39,7 @@ public class AdapterConfigSchemaTests
             "claude-code" => new ClaudeCodeAdapter(),
             "copilot" => new CopilotAdapter(),
             "codex" => new CodexAdapter(),
+            "agy" => new AgyAdapter(),
             "opencode" => new OpenCodeAdapter(),
             _ => new PiAdapter(),
         };

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Run agents on Google Antigravity (`agy`).** Add an `agy` provider with a Gemini API key or a Google sign-in from **Open terminal**; ILD installs the CLI.
 - **A run record shows every turn a visit took, with the model.** An AI visit's tokens now include cache and sub-agent tokens, and the visit lists its turns and model id.
 - **Preview tools work for an agent in a loop run without being told the work item id.** A `{{WorkItem.Id}}` placeholder is also available in prompts.
 - **A work item can continue a branch that already exists on origin.** Tick **Continue an existing branch** beside the branch name, and its runs check that branch out, commit on top of it and push to it.

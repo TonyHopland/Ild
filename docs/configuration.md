@@ -15,6 +15,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `WORKITEM_DB_PASSWORD`                       | Compose only: password for the `ild_workitems` role. Required, no default                                                                                                                                                                                                                                                                                 |
 | `ILD_CONTAINER_SOCKET_HOST`                  | Compose only: the container engine's socket on the machine the engine runs on, mounted into ILD. Required, no default ([which socket](deployment.md#which-socket))                                                                                                                                                                                        |
 | `ILD_DATA_PATH`                              | Base data directory for ILD runtime files                                                                                                                                                                                                                                                                                                                 |
+| `ILD_AGY_RELEASE_MANIFEST_URL`               | Where the Antigravity CLI release manifests are read from, with `{platform}` for the platform name; the vendor's own endpoint when unset (see [Antigravity](#antigravity-agy)) |
 | `ILD_WORKTREES_PATH`                         | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)                                                                                                                                                                                                                                                                      |
 | `ILD_LOG_LEVEL`                              | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)                                                                                                                                                                                                                                                                    |
 | `ILD_SECRET_KEY`                             | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)                                                                                                                                                                                                                                                                     |
@@ -171,6 +172,16 @@ A run mounts the zones it has something in, and only its own repository's. A **c
 - **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
 - **The store is never pruned.** Remove the volumes (`docker volume rm ild-tools-agents ild-tools-toolchains` and the `ild-tools-repo-…` ones) or empty the claim to start over.
 
+## Antigravity (agy)
+
+The Antigravity CLI is not an npm package. ILD downloads it from the vendor's release manifest, one per platform (`linux_amd64`, `linux_arm64`, the `_musl` builds, `darwin_*`), and checks the archive against the SHA-512 the manifest names. That check catches a damaged download; it says nothing about who published the file, because the manifest and the archive come from the same server. The vendor publishes no signature that ILD checks.
+
+The built-in manifest address is a Cloud Run endpoint the vendor's own installer script uses. It is not a documented or supported interface and may change or go away; set `ILD_AGY_RELEASE_MANIFEST_URL` (with `{platform}` where the platform name goes) to read the manifests from somewhere else, such as a mirror. It is read once when ILD starts.
+
+A manifest names only the newest build, so **Update** installs that one, automatic updates skip Antigravity (there is no release date to hold a build back by), and **Roll back** returns to the previous install ILD kept, without downloading. A run in a container or pod of its own reads the manifest on that machine, so it gets the build for that machine's architecture and C library. The version ILD holds is used when that machine already has it, or the manifest still names it; the manifest names only the newest build, so otherwise the run gets that one and the installer's log says so. This is weaker than for the npm agents, whose runs always get the exact version ILD selected: a rollback or hold of Antigravity reaches a run only while the held version is still installed there or still offered. With the release server unreachable, a run host that already has Antigravity uses the newest install it has, with a warning, and one that has none fails with a message saying so.
+
+**Signing in.** With no Gemini API key on the provider, a run uses the Google sign-in made in the provider terminal. ILD keeps the two files the CLI wrote (`~/.gemini/antigravity-cli/antigravity-oauth-token` and `~/.config/antigravity/credential-user-scope`) where only it can read them, writes a copy into the run's home as plain text for the turn, and deletes the copy when the turn ends. Anything the agent runs in that turn can read it meanwhile, which is why a Gemini API key, which never reaches the run, is the safer choice. A token the CLI refreshes during the turn is not saved back.
+
 ## Agent telemetry
 
 Coding-agent CLIs report usage to their vendors unless `DO_NOT_TRACK` is set.
@@ -242,7 +253,7 @@ The days run from 1 to 3650. A chat's last activity is its newest message, from 
 
 ## AI provider updates
 
-The coding-agent CLIs behind the AI providers (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) keep themselves up to date; there is no switch for it. If a release turns out to be a problem, roll back to the version before it, or update by hand, from the **Installed agents** menu on the AI Providers page.
+The coding-agent CLIs behind the AI providers (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) keep themselves up to date (Antigravity does not: see [Antigravity](#antigravity-agy)); there is no switch for it. If a release turns out to be a problem, roll back to the version before it, or update by hand, from the **Installed agents** menu on the AI Providers page.
 
 `ILD_AGENT_UPDATE_COOLDOWN_DAYS` is how many days a release must have been published before it is installed automatically: a whole number from 0 to 365, default `1`, `0` installing the newest release at once. It is read once when ILD starts, so changing it needs a restart. A missing or invalid value falls back to `1` with a warning in the log. Compose passes it to the `ild` container from `.env`.
 
@@ -1009,7 +1020,7 @@ note "via model gateway", one line per request. In `whitelist` mode an upstream 
 `blacklist` mode a listed one is, and the CLI gets an error that names the host and says the network policy refused it. The
 upstream is your own provider configuration, so it is exempt from the protected destinations, like a declared forward: a local
 model on a LAN address keeps working while `private` is on. So that `whitelist` mode does not stop the models, ILD adds a
-whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`,
+whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`, `generativelanguage.googleapis.com`,
 `api.github.com` and `.githubcopilot.com`, or the host of an upstream provider's base URL) when the provider is created or its
 base URL or type changes, and the first start after an upgrade adds them for the providers that exist. They are ordinary
 provider-scoped entries in Settings → Network: delete one and that provider's model calls are refused in `whitelist` mode. The

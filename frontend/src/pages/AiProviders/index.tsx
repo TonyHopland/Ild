@@ -35,6 +35,9 @@ const PERSISTED_CONFIG_FIELDS = ["customMcpServersJson", "extraArgs"] as const;
 const isPersistedConfigField = (name: string) =>
   (PERSISTED_CONFIG_FIELDS as readonly string[]).includes(name);
 
+// Antigravity runs on a Gemini API key or a Google sign-in, not a Base URL.
+const isAntigravity = (type: string) => type.toLowerCase() === "agy";
+
 /** The tags typed into the comma-separated Tags field, first spelling of each kept. */
 const parseTags = (text: string) =>
   text
@@ -162,6 +165,10 @@ export default function AiProviders() {
   // which ILD keeps and the agent never sees. It is the one sign-in that also has a field.
   const takesLongLivedToken = type.toLowerCase() === "claude-code";
 
+  // Antigravity runs on a Gemini API key, which ILD keeps and the agent never sees.
+  const takesGeminiKey = isAntigravity(type);
+  const takesApiKey = !cliAuth || takesLongLivedToken || takesGeminiKey;
+
   // What the selected type's adapter says about a model. Undefined means no
   // adapter declared anything.
   const modelSupport: AdapterModelSupport | undefined = adapterFor(type)?.modelSupport;
@@ -197,7 +204,7 @@ export default function AiProviders() {
     };
 
     // Send each persisted value whenever the selected type exposes its field
-    // (Custom MCP servers: opencode, claude-code, copilot, codex; Extra CLI arguments:
+    // (Custom MCP servers: opencode, claude-code, copilot, codex, agy; Extra CLI arguments:
     // those and pi). An empty string clears it. The server folds it into
     // AiProvider.Config, preserving any other stored keys. A type without the
     // field sends nothing for it, so that part of its config is left untouched.
@@ -210,12 +217,12 @@ export default function AiProviders() {
     setSaveError(null);
     try {
       if (editingProvider) {
-        if ((!cliAuth || takesLongLivedToken) && apiKey) {
+        if (takesApiKey && apiKey) {
           data.apiKey = apiKey;
         }
         await aiProviderService.update(editingProvider.id, data);
       } else {
-        data.apiKey = !cliAuth || takesLongLivedToken ? apiKey : "";
+        data.apiKey = takesApiKey ? apiKey : "";
         await aiProviderService.create(data);
       }
     } catch (error) {
@@ -300,9 +307,11 @@ export default function AiProviders() {
                   <span className="ap-value">{provider.model}</span>
                 </div>
               )}
-              {!cliAuthFor(provider.type) && (
+              {(!cliAuthFor(provider.type) || isAntigravity(provider.type)) && (
                 <div className="ap-field">
-                  <span className="ap-label">API Key</span>
+                  <span className="ap-label">
+                    {isAntigravity(provider.type) ? "Gemini API key" : "API Key"}
+                  </span>
                   <span className="ap-value ap-masked">
                     {provider.apiKey ? "••••••••" : "(not set)"}
                   </span>
@@ -393,7 +402,16 @@ export default function AiProviders() {
                   it below.
                 </div>
               )}
-              {cliAuth && !takesLongLivedToken ? (
+              {takesGeminiKey && (
+                <div className="ap-cli-note">
+                  Antigravity runs on a Gemini API key that ILD keeps and the agent never sees.
+                  Create one in Google AI Studio and paste it below. Or leave the key blank, save
+                  the provider and use <strong>Open terminal</strong> to sign in with your Google
+                  account: runs then use a copy of that sign-in. Leave the model blank, or give an
+                  id from <code>agy models</code>.
+                </div>
+              )}
+              {cliAuth && !takesLongLivedToken && !takesGeminiKey ? (
                 <div className="ap-cli-note">
                   This provider type authenticates via the locally-installed {cliAuth.cliName} CLI.
                   The first time you set it up, save the provider and then use{" "}
@@ -434,10 +452,14 @@ export default function AiProviders() {
                   )}
                 </div>
               )}
-              {(!cliAuth || takesLongLivedToken) && (
+              {takesApiKey && (
                 <div className="form-group">
                   <label htmlFor="apApiKey">
-                    {takesLongLivedToken ? "Long-lived token (from claude setup-token)" : "API Key"}
+                    {takesLongLivedToken
+                      ? "Long-lived token (from claude setup-token)"
+                      : takesGeminiKey
+                        ? "Gemini API key"
+                        : "API Key"}
                   </label>
                   <input
                     id="apApiKey"

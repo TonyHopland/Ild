@@ -40,6 +40,11 @@ internal sealed class PromptCapturingCli : IDisposable
         "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-1\",\"cwd\":\"/tmp\"}'\n"
         + "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n";
 
+    /// <summary>Antigravity's <c>--output-format stream-json</c> turn.</summary>
+    public const string AgyTurn =
+        "echo '{\"event\":\"init\",\"conversation_id\":\"c-1\"}'\n"
+        + "echo '{\"event\":\"result\",\"result\":{\"conversation_id\":\"c-1\",\"status\":\"SUCCESS\",\"response\":\"ok\"}}'\n";
+
     /// <summary>Exit 0 saying nothing — enough for opencode and copilot to succeed.</summary>
     public const string SilentSuccess = "";
 

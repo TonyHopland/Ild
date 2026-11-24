@@ -8,8 +8,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.ModelGateway;
 
-/// <summary>Where the gateway sends a request and the real credential it carries; no <paramref name="Secret"/> for an endpoint that takes none.</summary>
-public sealed record ModelCredential(Uri Upstream, string? Secret, IReadOnlyDictionary<string, string> Headers)
+/// <summary>
+/// Where the gateway sends a request and the real credential it carries; no <paramref name="Secret"/> for an endpoint that takes none.
+/// <paramref name="KeyHeader"/> names the header an API key goes in, where it is not a bearer token.
+/// </summary>
+public sealed record ModelCredential(Uri Upstream, string? Secret, IReadOnlyDictionary<string, string> Headers, string? KeyHeader = null)
 {
     public static readonly IReadOnlyDictionary<string, string> NoHeaders = new Dictionary<string, string>();
 }
@@ -29,6 +32,7 @@ public sealed class ModelCredentialSource : IModelCredentialSource
     private static readonly Uri AnthropicUpstream = new($"https://{GatewayRoutes.AnthropicHost}");
     private static readonly Uri GitHubUpstream = new($"https://{GatewayRoutes.GitHubApiHost}");
     private static readonly Uri ChatGptUpstream = new($"https://{GatewayRoutes.ChatGptHost}/backend-api");
+    private static readonly Uri GoogleUpstream = new($"https://{GatewayRoutes.GoogleHost}");
 
     private readonly IProcessEnvironment _environment;
     private readonly CodexLoginStore _codex;
@@ -67,6 +71,11 @@ public sealed class ModelCredentialSource : IModelCredentialSource
                 var secret = CopilotToken();
                 return secret is null ? null : new ModelCredential(GitHubUpstream, secret, ModelCredential.NoHeaders);
             }
+            case GatewayRoutes.Google:
+            {
+                var key = UpstreamKey(provider);
+                return key is null ? null : new ModelCredential(GoogleUpstream, key, ModelCredential.NoHeaders, GatewayRoutes.GoogleKeyHeader);
+            }
             case GatewayRoutes.Upstream:
             {
                 return Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var upstream)
@@ -87,7 +96,7 @@ public sealed class ModelCredentialSource : IModelCredentialSource
     public static string? ClaudeLongLivedToken(AiProvider provider)
         => string.IsNullOrWhiteSpace(provider.ApiKey) ? null : provider.ApiKey.Trim();
 
-    /// <summary>The key a base-URL provider (OpenCode, Pi) calls its endpoint with.</summary>
+    /// <summary>The key a base-URL provider (OpenCode, Pi) or the Gemini API (Antigravity) is called with.</summary>
     public static string? UpstreamKey(AiProvider provider)
     {
         var key = !string.IsNullOrWhiteSpace(provider.ApiKey) ? provider.ApiKey : AiProviderConfig.Parse(provider.Config).ApiKey;

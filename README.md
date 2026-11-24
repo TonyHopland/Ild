@@ -4,7 +4,7 @@
 
 ILD runs coding agents on your work items, in loops you design. You put work on a taskboard; ILD picks it up, runs it through a loop template in its own git worktree, stops wherever the loop wants a human, and usually ends in a pull request. A standalone WorkItem Server holds the board, so several ILD instances can share one.
 
-A loop is a versioned, visual template made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `Set Variable`, `PR`, `Condition` and `Cleanup` nodes. AI nodes run an agent CLI — `opencode`, `pi`, `claude-code`, `copilot` or `codex` — inside the worktree.
+A loop is a versioned, visual template made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `Set Variable`, `PR`, `Condition` and `Cleanup` nodes. AI nodes run an agent CLI — `opencode`, `pi`, `claude-code`, `copilot`, `codex` or `agy` (Google Antigravity) — inside the worktree.
 
 ## What ILD does
 
@@ -39,7 +39,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ### Getting started
 
-**1. Add an agent** — on **AI Providers**, pick the coding agent CLI to run (`opencode`, `pi`, `claude-code`, `copilot` or `codex`), optionally a model and extra arguments, and give it tags. An AI node whose tag matches runs on this provider; the rest run on the default one. CLIs that sign in with a subscription, like Claude Code, are logged in once from the provider's **Open terminal**.
+**1. Add an agent** — on **AI Providers**, pick the coding agent CLI to run (`opencode`, `pi`, `claude-code`, `copilot`, `codex` or `agy`), optionally a model and extra arguments, and give it tags. An AI node whose tag matches runs on this provider; the rest run on the default one. CLIs that sign in with a subscription, like Claude Code, are logged in once from the provider's **Open terminal**.
 
 ![Add an agent](docs/screenshots/AddAgent.png)
 

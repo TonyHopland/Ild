@@ -393,6 +393,11 @@ public sealed class RunToolchainTests : IDisposable
         var arguments = RunToolStore.Arguments([new RunTool("dotnet", "10")], [new RunAgent(ManagedAgentCatalog.Codex, "0.167.0")]);
         Assert.Equal(["agentnode=node@24", "tool=dotnet@10", "agent=codex|@openai/codex|0.167.0|codex"], arguments);
         Assert.Empty(RunToolStore.Arguments([], []));
+        Assert.Equal(
+            ["tool=go@1.23", """release={"key":"agy","manifest":"https://releases.example/m/{platform}.json?a=1|2","version":"1.5.16","bin":"agy","entry":"antigravity"}"""],
+            RunToolStore.Arguments(
+                [new RunTool("go", "1.23")],
+                [new RunAgent(ManagedAgentCatalog.Agy, "1.5.16", "https://releases.example/m/{platform}.json?a=1|2")]));
         Assert.Equal(["tool=go@1.23"], RunToolStore.Arguments([new RunTool("go", "1.23")], []));
     }
 
@@ -487,7 +492,7 @@ public sealed class RunToolchainTests : IDisposable
 
     private static void InstallAgent(string dataRoot, ManagedAgent agent, string id, string version)
     {
-        var package = Path.Combine(ManagedAgentInstall.VersionDir(dataRoot, agent, id), "node_modules", agent.NpmPackage);
+        var package = Path.Combine(ManagedAgentInstall.VersionDir(dataRoot, agent, id), "node_modules", agent.NpmPackage!);
         Directory.CreateDirectory(package);
         File.WriteAllText(Path.Combine(package, "package.json"), $$"""{ "name": "{{agent.NpmPackage}}", "version": "{{version}}" }""");
     }

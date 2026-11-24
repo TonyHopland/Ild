@@ -199,8 +199,9 @@ export default function InstalledAgentsMenu() {
           <div className="ap-popover-backdrop" onClick={() => setOpen(false)} />
           <div className="ap-popover" role="dialog" aria-label="Installed agents">
             <p className="ap-popover-note">
-              Pi, OpenCode, Claude Code, GitHub Copilot and Codex live on the persistent{" "}
-              <code>/data</code> volume and update themselves once a release is old enough.
+              Pi, OpenCode, Claude Code, GitHub Copilot, Codex and Antigravity live on the
+              persistent <code>/data</code> volume. All but Antigravity update themselves once a
+              release is old enough.
             </p>
             {loadError && <p className="ap-agent-error ap-popover-note">{loadError}</p>}
             {agents === null && !loadError && <p className="ap-popover-note">Loading…</p>}

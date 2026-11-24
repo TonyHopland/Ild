@@ -57,8 +57,8 @@ public class AiToolCatalogTests
         Assert.Equal(expectedKeys, result);
     }
 
-    /// <summary>Copilot and Codex: their only tool is ild, so an explicit list without it turns ILD off.</summary>
-    public static TheoryData<string> IldOnlyProviderTypes => new() { "copilot", "codex", " Codex " };
+    /// <summary>Copilot, Codex and Antigravity: their only tool is ild, so an explicit list without it turns ILD off.</summary>
+    public static TheoryData<string> IldOnlyProviderTypes => new() { "copilot", "codex", " Codex ", "agy" };
 
     [Theory]
     [MemberData(nameof(IldOnlyProviderTypes))]
@@ -105,6 +105,7 @@ public class AiToolCatalogTests
     [InlineData("copilot", false)]
     [InlineData("codex", false)]
     [InlineData("CODEX", false)]
+    [InlineData("agy", false)]
     [InlineData("claude-code", true)]
     [InlineData("opencode", true)]
     [InlineData("pi", true)]

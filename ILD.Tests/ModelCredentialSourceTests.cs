@@ -55,6 +55,18 @@ public sealed class ModelCredentialSourceTests : IDisposable
         }.ToJsonString());
 
     [Fact]
+    public async Task An_antigravity_provider_calls_the_gemini_api_with_its_key_in_the_gemini_header()
+    {
+        var credential = await _source.ResolveAsync(Provider("agy", " gemini-key "), GatewayRoutes.Google, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new Uri("https://generativelanguage.googleapis.com"), credential!.Upstream);
+        Assert.Equal("gemini-key", credential.Secret);
+        Assert.Equal("x-goog-api-key", credential.KeyHeader);
+        Assert.Null(await _source.ResolveAsync(Provider("agy"), GatewayRoutes.Google, TestContext.Current.CancellationToken));
+        Assert.Null(await _source.ResolveAsync(Provider("agy", "k"), GatewayRoutes.Upstream, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Claude_uses_the_token_saved_on_the_provider_over_the_stored_login()
     {
         Write(".claude/.credentials.json", """{"claudeAiOauth":{"accessToken":"stored","expiresAt":9999999999999}}""");

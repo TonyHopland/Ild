@@ -17,6 +17,7 @@ Everything below was run live in the agent pod on 2026-11-06. No ILD code change
 | Copilot 1.0.105 | GitHub login | **Gateway works**, but HTTPS-only and the gateway must rewrite one JSON response | `GH_HOST=<ILD's run-facing host:HTTPS port>` + placeholder `COPILOT_GITHUB_TOKEN` + `NODE_EXTRA_CA_CERTS` (a copy of the certificate staged into the run) |
 | OpenCode 1.19.5 | Base URL + key | **Gateway works** | `provider.<id>.options.baseURL` / `apiKey` (what the adapter already writes) |
 | Pi 1.5.0 | Base URL + key | **Gateway works** | `models.json` `baseUrl` / `apiKey` (what the adapter already writes) |
+| Antigravity CLI (`agy`) 1.5.16 | Gemini API key | **Gateway works** (checked against a fake upstream, see its row) | `AGY_LLM_GATEWAY_URL` + placeholder `AGY_LLM_GATEWAY_API_KEY` |
 
 What the adapters expose today: `ClaudeCodeAdapter`, `CodexAdapter` and `CopilotAdapter` are subscription-only and ignore `AiProvider.BaseUrl` and `ApiKey`. The two "API key" rows for Claude and Codex show what the CLIs can do, not what ILD configures now. OpenCode and Pi already take a base URL and key from the provider.
 
@@ -192,6 +193,33 @@ upstream: keyOk=true on both
 ```
 
 CLI output: the JSON event stream ended with the assistant message ``…said: `hello-from-file`… Ran `echo gateway-ok3 > out.txt` — succeeded``; `out.txt` held `gateway-ok3`. **No host other than the gateway was contacted.** No refresh.
+
+### Antigravity CLI (`agy`), Gemini API key: gateway works
+
+Run on 2026-11-24 with a scratch `HOME` and no Google login. Antigravity has a gateway mode of its own, so it needs neither a login nor a certificate: with it set, the CLI never asks for one.
+
+```
+HOME=<scratch>
+AGY_LLM_GATEWAY_URL=http://127.0.0.1:4556/gateway/google     # a path prefix is kept
+AGY_LLM_GATEWAY_API_KEY=ild-placeholder
+agy -p "…" --dangerously-skip-permissions --output-format stream-json [--model <id>] [--conversation <id>]
+```
+
+```
+GET  /gateway/google/v1beta/models?pageSize=1000   Bearer <PLACEHOLDER>
+GET  /gateway/google/v1/models                     Bearer <PLACEHOLDER>
+POST /gateway/google/v1beta/models/<model>:streamGenerateContent?alt=sse   Bearer <PLACEHOLDER>  → 200 text/event-stream
+```
+
+- **The key arrives as a bearer token**, in `Authorization`. The Gemini API takes its key in `x-goog-api-key`, so the gateway drops the placeholder and sets that header to the provider's key.
+- **The upstream was a fake that answered the SSE stream**, so this proves the redirect, the paths, the header the placeholder travels in and the output formats, not Google's acceptance of the key. The real upstream is `generativelanguage.googleapis.com`.
+- **Placeholder shape**: any string. The CLI also needed no login file.
+- **The manifest endpoint** the installer script uses (`antigravity-cli-auto-updater-….run.app`) is not a documented interface; ILD reads it from `ILD_AGY_RELEASE_MANIFEST_URL` when set. The SHA-512 in a manifest is an integrity check only.
+- **Models**: `--model` is checked against the list the CLI gets from `GET /v1beta/models`, so an unknown id fails at once with the list of known ones.
+- **Output**: `stream-json` prints `init`, `step_update` (an `agent_response` step carries `text_delta` and that call's `usage`) and a final `result` with `conversation_id`, `status`, `response`, `error` and the conversation's running `usage`. A `429` is retried for minutes before the result reports `API error … RESOURCE_EXHAUSTED`.
+- **Resume**: `--conversation <id>` continues a conversation held in one SQLite file, `~/.gemini/antigravity-cli/conversations/<id>.db`. Copied alone into a fresh `HOME`, it resumed (`num_turns` counted on). After each exit only the `.db` was in the folder (no `-wal` or `-journal` file), so the one file is the whole conversation. It changes in place, so ILD saves it whole each turn, never as an append. An unknown id prints a warning and starts a new conversation.
+- **MCP servers** are read from `~/.gemini/config/mcp_config.json` and from `.agents/mcp_config.json` in the working directory. There is no flag or variable for a file of one's own.
+- **Google account login**: it talks to Google's Code Assist endpoints, not the Gemini API, which the gateway mode does not reach, so it cannot go through the gateway. A provider with no key therefore runs on a copy of the stored sign-in, written into the run's home (a read-only-copy credential path), and `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1` makes the CLI keep its token in a file rather than the OS keyring. After a sign-in in a provider terminal (no keyring, `AGY_CLI_FORCE_FILE_TOKEN_STORAGE=1`) the CLI wrote `~/.gemini/antigravity-cli/antigravity-oauth-token` (JSON with `token`, `auth_method` and `id_token_email`) and `~/.config/antigravity/credential-user-scope`. ILD imports those two files and copies them into the run. With that sign-in a headless turn, a resumed turn (`--conversation`), a shell tool call, `--model` (an id from `agy models` or its display name), and ILD's MCP server through the user-level `mcp_config.json` all worked, and the `stream-json` events matched the shapes above (text arrives as `ACTIVE` deltas, usage on the `DONE` step). Direct egress to Google's hosts must be allowed for such a run.
 
 ## Fallback: read-only per-run copy
 

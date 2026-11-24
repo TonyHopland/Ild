@@ -16,7 +16,8 @@ public static class CredentialImport
     /// <summary>The most a login file may hold; a larger one is not kept.</summary>
     public const int MaxBytes = 256 * 1024;
 
-    private sealed record Login(string RelativePath, Func<JsonNode, bool> HoldsLogin, bool Jsonc = false);
+    /// <param name="Requires">Another file that must be imported in the same pass for this one to count: an account file means nothing without its token.</param>
+    private sealed record Login(string RelativePath, Func<JsonNode, bool> HoldsLogin, bool Jsonc = false, bool Json = true, string? Requires = null);
 
     private static readonly Login[] Logins =
     [
@@ -25,6 +26,8 @@ public static class CredentialImport
         new(".copilot/config.json", node => node["authTokens"] is JsonObject { Count: > 0 }, Jsonc: true),
         new(".pi/agent/auth.json", node => node is JsonObject { Count: > 0 }),
         new(".local/share/opencode/auth.json", node => node is JsonObject { Count: > 0 }),
+        new(AgyLogin.TokenFile, node => node["token"] is not null),
+        new(AgyLogin.ScopeFile, _ => true, Json: false, Requires: AgyLogin.TokenFile),
     ];
 
     /// <returns>The files imported, relative to the home.</returns>
@@ -56,6 +59,7 @@ public static class CredentialImport
         {
             try
             {
+                if (login.Requires is not null && !imported.Contains(login.Requires)) continue;
                 var text = await read(login.RelativePath, ct);
                 if (text is null || text.Length > MaxBytes || !Holds(login, text)) continue;
 
@@ -72,6 +76,7 @@ public static class CredentialImport
 
     private static bool Holds(Login login, string text)
     {
+        if (!login.Json) return !string.IsNullOrWhiteSpace(text);
         if (login.Jsonc)
             text = string.Join('\n', text.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
         try { return JsonNode.Parse(text) is { } node && login.HoldsLogin(node); }

@@ -160,9 +160,11 @@ public static class RunToolStore
     public static IReadOnlyList<string> Arguments(IReadOnlyList<RunTool> tools, IReadOnlyList<RunAgent> agents)
     {
         var arguments = new List<string>();
-        if (agents.Count > 0) arguments.Add($"agentnode={AgentNode}");
+        if (agents.Any(a => a.ReleaseManifest is null)) arguments.Add($"agentnode={AgentNode}");
         arguments.AddRange(tools.Select(t => $"tool={t}"));
-        arguments.AddRange(agents.Select(a => $"agent={a.Agent.Key}|{a.Agent.NpmPackage}|{a.Version}|{a.Agent.BinaryName}"));
+        arguments.AddRange(agents.Select(a => a.ReleaseManifest is { } manifest
+            ? "release=" + JsonSerializer.Serialize(new { key = a.Agent.Key, manifest, version = a.Version, bin = a.Agent.BinaryName, entry = a.Agent.Release!.ArchiveEntry })
+            : $"agent={a.Agent.Key}|{a.Agent.NpmPackage}|{a.Version}|{a.Agent.BinaryName}"));
         return arguments;
     }
 
@@ -281,12 +283,78 @@ public static class RunToolStore
           jq -cn --arg key "$key" --arg version "$version" --arg wrap "$dir/wrap" '{kind: "agent", key: $key, version: $version, path: [$wrap]}'
         }
 
+        # Installs an agent shipped as a release archive, for this machine's platform (architecture, and musl or glibc: the naming and
+        # the musl test mirror ManagedAgentService.ReleasePlatform, which does the same on ILD's own machine). What is guaranteed is
+        # narrower than for an npm agent. The version ILD holds is used when it is already installed here, or when the manifest still
+        # names it. A manifest names only the newest build, so otherwise the run gets that one and stderr says so. With the manifest
+        # unreachable, the newest install already here is used, with a warning; with none, the script stops. An install that is
+        # already complete makes no request when it is the version ILD holds. The extraction mirrors ManagedAgentRelease.InstallReleaseAsync.
+        ensure_release_agent() {
+          local key="$1" manifest="$2" want="$3" bin="$4" entry="$5" tool os arch platform info problem version="" url="" sha512="" dir newest
+          for tool in curl sha512sum tar; do
+            command -v "$tool" >/dev/null || { echo "ild: $tool is needed to install $key and is not on this machine" >&2; return 1; }
+          done
+          case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "ild: $key has no build for $(uname -s)" >&2; return 1 ;; esac
+          case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "ild: $key has no build for $(uname -m)" >&2; return 1 ;; esac
+          platform="${os}_${arch}"
+          if [ "$os" = linux ] && compgen -G '/lib/*musl*' >/dev/null; then platform="${platform}_musl"; fi
+
+          if [ -e "$root/agents/$key/$want-$platform/.ild-complete" ]; then
+            version="$want"
+          else
+            # A manifest that cannot be read, or that is not usable, is treated alike: the newest install on this host stands in for it.
+            problem=""
+            if info="$(curl -fsSL "${manifest//\{platform\}/$platform}")"; then
+              version="$(jq -r '.version // empty' <<< "$info" 2>/dev/null || true)"; url="$(jq -r '.url // empty' <<< "$info" 2>/dev/null || true)"; sha512="$(jq -r '.sha512 // empty' <<< "$info" 2>/dev/null || true)"
+              case "$url" in https://*) ;; *) url="" ;; esac
+              # The version names a folder in the store, so it is only taken as a version number, never as a path.
+              [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || version=""
+              if [ -z "$version" ] || [ -z "$url" ] || [ -z "$sha512" ]; then problem="the $key release manifest for $platform is incomplete"; fi
+            else
+              problem="could not read the $key release manifest for $platform"
+            fi
+            if [ -n "$problem" ]; then
+              newest="$({ compgen -G "$root/agents/$key/*-$platform/.ild-complete" || true; } | sed -E "s|.*/agents/$key/(.*)-$platform/.ild-complete|\1|" | sort -V | tail -n 1)"
+              if [ -z "$newest" ]; then echo "ild: $problem, and no $key is installed here" >&2; return 1; fi
+              echo "ild: $problem; the installed $key $newest is used" >&2
+              version="$newest"
+            elif [ "$version" != "$want" ]; then
+              echo "ild: $key $want is no longer offered; the release server names $version, which is installed instead" >&2
+            fi
+          fi
+
+          dir="$root/agents/$key/$version-$platform"
+          if [ ! -e "$dir/.ild-complete" ]; then
+            mkdir -p "$root/agents/$key"
+            # The lock is held by the subshell alone, so it is let go however the install ends.
+            (
+              exec 9>"$root/agents/$key/$version-$platform.lock"; flock 9
+              [ -e "$dir/.ild-complete" ] && exit 0
+              rm -rf "$dir"; mkdir -p "$dir/wrap" "$dir/release"
+              curl -fsSL -o "$dir/release.tar.gz" "$url" >&2 || { echo "ild: could not download $key $version from $url" >&2; exit 1; }
+              printf '%s  %s\n' "$sha512" "$dir/release.tar.gz" | sha512sum -c - >&2 || { echo "ild: the downloaded $key archive does not match its manifest's checksum" >&2; exit 1; }
+              tar -xzf "$dir/release.tar.gz" -C "$dir/release" "$entry" >&2 || { echo "ild: could not unpack $entry from the $key archive" >&2; exit 1; }
+              rm -f "$dir/release.tar.gz"
+              if [ ! -f "$dir/release/$entry" ] || [ -L "$dir/release/$entry" ]; then echo "ild: the $key archive has no regular file $entry" >&2; exit 1; fi
+              chmod 0755 "$dir/release/$entry"
+              printf '#!/bin/sh\nexec "%s" "$@"\n' "$dir/release/$entry" > "$dir/wrap/$bin"
+              chmod 0755 "$dir/wrap/$bin"
+              touch "$dir/.ild-complete"
+            ) || return 1
+          fi
+          jq -cn --arg key "$key" --arg version "$version" --arg wrap "$dir/wrap" '{kind: "agent", key: $key, version: $version, path: [$wrap]}'
+        }
+
         agent_node=""
         for arg in "$@"; do
           case "$arg" in
             agentnode=*) spec="${arg#agentnode=}"; ensure_tool "$spec"; agent_node="$(jq -r '.path[0]' "$(manifest_for "$spec")")"; jq -c '. + {kind: "agentnode"}' "$(manifest_for "$spec")" ;;
             tool=*) spec="${arg#tool=}"; ensure_tool "$spec"; jq -c '. + {kind: "tool"}' "$(manifest_for "$spec")" ;;
             agent=*) IFS='|' read -r key package version bin <<< "${arg#agent=}"; ensure_agent "$key" "$package" "$version" "$bin" ;;
+            release=*)
+              release="${arg#release=}"
+              ensure_release_agent "$(jq -r .key <<< "$release")" "$(jq -r .manifest <<< "$release")" "$(jq -r .version <<< "$release")" \
+                "$(jq -r .bin <<< "$release")" "$(jq -r .entry <<< "$release")" ;;
           esac
         done
         """;

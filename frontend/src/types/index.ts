@@ -1270,7 +1270,8 @@ export interface AiToolDefinition {
 export interface ManagedAgentStatus {
   key: string;
   displayName: string;
-  npmPackage: string;
+  /** The npm package the agent comes from; null for one that is downloaded as a release. */
+  npmPackage: string | null;
   installedVersion: string | null;
   latestVersion: string | null;
   updateAvailable: boolean;

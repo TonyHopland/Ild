@@ -14,6 +14,9 @@ public static class SessionSnapshotFormats
     /// <summary>A codex rollout file, raw JSONL.</summary>
     public const string CodexJsonl = "codex-jsonl";
 
+    /// <summary>An Antigravity CLI conversation file: one SQLite database, kept whole.</summary>
+    public const string AgyDb = "agy-db";
+
     /// <summary>The JSON <c>opencode export</c> prints.</summary>
     public const string OpenCodeJson = "opencode-json";
 
