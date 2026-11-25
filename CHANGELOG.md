@@ -7,18 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-25
+
 ### Added
 
-- **Run agents on Google Antigravity (`agy`).** Add an `agy` provider with a Gemini API key or a Google sign-in from **Open terminal**; ILD installs the CLI.
-- **A run record shows every turn a visit took, with the model.** An AI visit's tokens now include cache and sub-agent tokens, and the visit lists its turns and model id.
+- **Run agents on Google Antigravity (`agy`).** Sign in with a Gemini API key or a Google account.
+- **A run record shows every turn a visit took, with the model.**
 - **Preview tools work for an agent in a loop run without being told the work item id.** A `{{WorkItem.Id}}` placeholder is also available in prompts.
-- **A work item can continue a branch that already exists on origin.** Tick **Continue an existing branch** beside the branch name, and its runs check that branch out, commit on top of it and push to it.
+- **A work item can continue a branch that already exists on origin.** Tick **Continue an existing branch** beside the branch name.
 - **An outside AI with control of work can reorder work items.**
 - **Run pods can be kept off chosen nodes.**
 
 ### Changed
 
-- **The .NET libraries are updated to the 10.0.15 security release, and the image ships Node 26.13.1 (also a security release) and npm 12.2.3.**
+- **The .NET libraries and the bundled Node and npm are updated to security releases.**
 - **The Action tab no longer jumps or flickers while a run updates.**
 - **A run now parks on a node that finishes with no outgoing edge for its result, instead of completing and moving the item to Done.**
 - **A node no longer waits for processes the agent left running,** only for background work it registered, which is now listed on the node.
