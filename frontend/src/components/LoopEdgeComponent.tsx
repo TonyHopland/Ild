@@ -4,7 +4,7 @@ import {
   EdgeLabelRenderer,
   getSmoothStepPath,
   useReactFlow,
-  useStore,
+  useEdgesStore,
   type EdgeProps,
 } from "@xyflow/react";
 import { parallelEdgeRoute, parallelLabelOffset } from "../utils/edgeUtils";
@@ -55,7 +55,7 @@ export default function LoopEdgeComponent({
   );
   // Read this edge's lane (index) and how many edges share its route straight
   // from the store so the fan re-balances as siblings are added or removed.
-  const route = useStore(
+  const route = useEdgesStore(
     useCallback(
       (store) => {
         const self = store.edges.find((edge) => edge.id === id);
