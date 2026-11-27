@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Upgraded the loop editor's graph library (@xyflow/react) to v13.**
+
 ## [0.27.0] - 2026-11-25
 
 ### Added

@@ -12,7 +12,6 @@ import {
   type Edge,
   type Connection,
   type OnEdgesChange,
-  applyEdgeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -439,7 +438,7 @@ export default function LoopEditor() {
   const onEdgesChangeCustom: OnEdgesChange = useCallback(
     (changes) => {
       setEdges((previousEdges) => {
-        const nextEdges = applyEdgeChanges(changes, previousEdges);
+        const nextEdges = changes.applyTo(previousEdges);
         return nextEdges.map((edge) => {
           const previousEdge = previousEdges.find((candidate) => candidate.id === edge.id);
           if (!previousEdge) return edge;

@@ -33,7 +33,7 @@ vi.mock("@xyflow/react", () => ({
   useReactFlow: () => ({
     getEdge: (id: string) => ({ id, source: "pr", target: "fix", data: {} }) as Edge,
   }),
-  useStore: (selector: (store: { edges: typeof storeEdges }) => unknown) =>
+  useEdgesStore: (selector: (store: { edges: typeof storeEdges }) => unknown) =>
     selector({ edges: storeEdges }),
 }));
 
