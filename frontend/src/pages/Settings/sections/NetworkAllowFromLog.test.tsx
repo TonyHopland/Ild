@@ -176,4 +176,24 @@ describe("Add allowed hosts from the log", () => {
     expect(read).not.toHaveBeenCalled();
     expect(screen.queryByText(/hosts were used in the last 7 days/)).toBeNull();
   });
+
+  test("says so when the recent traffic of a scope could not be checked", async () => {
+    const read = mockServices("monitor");
+    read.mockRejectedValue(new Error("boom"));
+    vi.spyOn(services.settingsService, "put").mockResolvedValue({
+      key: services.NetworkSettingKeys.Mode,
+      value: "whitelist",
+    });
+    render(<NetworkSettings />, { wrapper: WorkItemHubProvider });
+
+    fireEvent.click(
+      within(await screen.findByRole("group", { name: "Filter mode" })).getByRole("button", {
+        name: "Whitelist",
+      }),
+    );
+
+    expect(
+      await screen.findByText(/Could not check the recent traffic of Installers, Claude/),
+    ).toBeTruthy();
+  });
 });

@@ -351,6 +351,7 @@ export default function NetworkSettings() {
         covered: hasGlobal || allowed.some((e) => e.aiProviderId === p.id),
       })),
     ].filter((s) => !s.covered);
+    const unchecked: string[] = [];
     const found = await Promise.all(
       scopes.map(async ({ scope, label }) => {
         const { kind, providerId } = scopeRequest(scope);
@@ -358,10 +359,15 @@ export default function NetworkSettings() {
           const hosts = await networkService.getLogDestinations(kind, providerId, DESTINATION_DAYS);
           return { scope, label, count: hosts.filter((h) => !h.allowed).length };
         } catch {
+          unchecked.push(label);
           return { scope, label, count: 0 };
         }
       }),
     );
+    if (unchecked.length > 0)
+      setModeError(
+        `Could not check the recent traffic of ${unchecked.join(", ")}; review the log before relying on whitelist.`,
+      );
     setUnallowed(found.filter((f) => f.count > 0));
   };
 

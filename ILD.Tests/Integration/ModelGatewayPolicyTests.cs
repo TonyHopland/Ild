@@ -199,7 +199,6 @@ public class ModelGatewayPolicyTests : IAsyncLifetime
         Assert.Single(_hits);
     }
 
-
     private sealed class PrivateLoopback : IProtectedDestinationSource
     {
         public ValueTask<IReadOnlyList<ProtectedDestination>> GetAsync(CancellationToken ct = default)
