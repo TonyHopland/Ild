@@ -199,9 +199,9 @@ ARG RUNNER_UID=10001
 # Pinned like Node and npm, so a new mise release cannot change the image without a commit. mise's apt repository
 # lists only its newest version, so apt cannot hold a pin: the .deb for the pinned version is downloaded from the
 # repository's pool and checked against the SHA-256 below, one per architecture. To bump, change the version and both sums.
-ARG MISE_VERSION=2026.11.4
-ARG MISE_SHA256_AMD64=207ae03669918b4cc98ff505526f16568cbe0a4b5e6c9da97029600f6f3dbefd
-ARG MISE_SHA256_ARM64=841f105cc4d415437630b07a7f81f0e3d3ace2298295e3bbd69ef2dd3b656177
+ARG MISE_VERSION=2026.11.14
+ARG MISE_SHA256_AMD64=e985aeb3ef21b13f94239f8aa74a671bff90ad670ac995788c193cd2b5f5e795
+ARG MISE_SHA256_ARM64=5bf9bfca22061bf460279756b9e12760ac56301de0f050bd1e86786c8ee33b2c
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash tini git ca-certificates curl wget gnupg xz-utils unzip zip jq ripgrep build-essential socat \
