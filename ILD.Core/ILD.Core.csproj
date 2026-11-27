@@ -8,9 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="KubernetesClient" Version="21.0.8" />
+    <PackageReference Include="KubernetesClient" Version="21.0.41" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.15" />
-    <PackageReference Include="Porta.Pty" Version="2.2.3" />
+    <PackageReference Include="Porta.Pty" Version="2.2.4" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.15" />
