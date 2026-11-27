@@ -21,8 +21,7 @@ public class AiProvidersControllerPagingTests
         db.Context,
         new ProviderStore(db.Context),
         new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
-        Mock.Of<IManagedAgentProvisioner>(),
-        db.NetworkEdits());
+        Mock.Of<IManagedAgentProvisioner>());
 
     [Fact]
     public async Task Providers_sharing_a_name_page_in_a_stable_order_each_exactly_once()

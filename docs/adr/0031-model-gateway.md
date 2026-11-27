@@ -43,7 +43,6 @@ The matrix behind these rows, with what was run live, is `docs/run-hosts/provide
 **Amendment (work item 634).** The gateway is under the network policy. Its upstream is judged by the mode and lists
 (`EgressPolicySnapshot.DecideUpstream`, scoped to the calling lease's provider), exempt from the protected destinations like a
 declared forward because it is the operator's own provider configuration, and logged in the Network Log, one row per request,
-marked `gateway`, from a budget of rows of its own per lease. A refusal is a 403 naming the host. ILD whitelists each
-provider's upstream hosts for it when the provider is created or changed, and once at startup for existing providers, so
-`whitelist` mode does not stop model calls; an operator who deletes such an entry gets the refusal. ILD's own calls that are not
+marked `gateway`, from a budget of rows of its own per lease. A refusal is a 403 naming the host. ~~ILD whitelists each
+provider's upstream hosts for it when the provider is created or changed, and once at startup for existing providers.~~ *Superseded: ILD ships no allow lists and adds no entry for a provider; the operator allows the upstream from the Network Log, and a refusal names the host and the provider scope.* ILD's own calls that are not
 on a run's behalf (the Codex login refresh, version checks, mirror fetches) stay outside the lists.

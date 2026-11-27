@@ -50,18 +50,4 @@ public static class GatewayRoutes
         Upstream when Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var uri) => [uri.Host],
         _ => [],
     };
-
-    /// <summary>
-    /// The hosts the gateway calls for this provider, which ILD whitelists for it (provider-scoped) so that `whitelist` mode does not
-    /// stop its model calls: the fixed hosts of its type, or the host of its base URL. A pattern is an exact host or a leading-dot suffix.
-    /// </summary>
-    public static IReadOnlyList<string> UpstreamHosts(AiProvider provider) => RouteFor(provider.Type) switch
-    {
-        Anthropic => [AnthropicHost],
-        ChatGpt => [ChatGptHost],
-        GitHub => [GitHubApiHost, ".githubcopilot.com"],
-        Google => [GoogleHost],
-        Upstream when Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out var uri) => [EgressRules.NormalizeHost(uri.Host)],
-        _ => [],
-    };
 }

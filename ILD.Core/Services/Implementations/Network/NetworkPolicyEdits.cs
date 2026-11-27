@@ -25,16 +25,15 @@ public readonly record struct NetworkEditResult<T>(NetworkEditOutcome Outcome, T
 
 /// <summary>
 /// The one place the network policy is edited (ADR-0019, ADR-0020): the entry and forward rules, the races two edits can run
-/// into (the unique indexes answer what a read first could not), the mode, the protected destinations and the entries ILD adds
-/// for a provider. The egress proxy caches the policy for a second, so an edit that changed anything invalidates it and then
+/// into (the unique indexes answer what a read first could not), the mode and the protected destinations. The egress proxy caches
+/// the policy for a second, so an edit that changed anything invalidates it and then
 /// tells the listeners, in that order, here and nowhere else; an edit that is refused does neither.
 /// </summary>
-public sealed partial class NetworkPolicyEdits(
+public sealed class NetworkPolicyEdits(
     INetworkPolicyStore entries,
     INetworkForwardStore forwards,
     IProviderStore providers,
     IAppSettingStore settings,
-    AppDbContext db,
     IEgressPolicy policy,
     INetworkNotifier notifier)
 {
@@ -72,6 +71,44 @@ public sealed partial class NetworkPolicyEdits(
         var valid = await ValidateEntryAsync(host, kind, providerId, installers);
         if (valid.Error is not null) return NetworkEditResult<NetworkPolicyEntry>.Refuse(valid.Error);
         return await AddOrFindAsync(valid.Host, kind, providerId, installers, ct);
+    }
+
+    /// <summary>
+    /// Allows each pattern in one scope, all or none: one that is not valid refuses the lot, and the new entries are stored in one save. A
+    /// pattern already allowed there is left as it is. Returns the entries it created.
+    /// </summary>
+    public async Task<NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>> AddAllowedAsync(IReadOnlyList<string> patterns, Guid? providerId, bool installers, CancellationToken ct = default)
+    {
+        var hosts = new List<string>();
+        foreach (var pattern in patterns)
+        {
+            var valid = await ValidateEntryAsync(pattern, NetworkListKind.Whitelist, providerId, installers);
+            if (valid.Error is not null) return NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>.Refuse(valid.Error);
+            if (!hosts.Contains(valid.Host, StringComparer.Ordinal)) hosts.Add(valid.Host);
+        }
+
+        var created = new List<NetworkPolicyEntry>();
+        foreach (var host in hosts)
+        {
+            if (await entries.FindEntryAsync(NetworkListKind.Whitelist, host, providerId, ct, installers) is not null) continue;
+            created.Add(new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = host, ListKind = NetworkListKind.Whitelist, AiProviderId = providerId, Installers = installers, CreatedAt = DateTime.UtcNow });
+        }
+        if (created.Count == 0) return new(NetworkEditOutcome.Created, created);
+        try
+        {
+            await entries.AddEntriesAsync(created, ct);
+        }
+        catch (DbUpdateException)
+        {
+            // The unique index caught what the reads above could not: another request added one of these first.
+            var raced = false;
+            foreach (var entry in created)
+                raced |= await entries.FindEntryAsync(NetworkListKind.Whitelist, entry.Host, providerId, ct, installers) is not null;
+            if (!raced) throw;
+            return NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>.Refuse("Another change to the allowed hosts ran at the same time; nothing was added, try again");
+        }
+        await ChangedAsync();
+        return new(NetworkEditOutcome.Created, created);
     }
 
     /// <summary>Adds the host of a logged connection to a list, as itself: a pattern an agent sent is refused, never widened into a rule.</summary>

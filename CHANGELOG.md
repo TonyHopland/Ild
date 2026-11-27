@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ILD no longer ships any allow list.** The network policy starts empty in `monitor`, and **Add allowed hosts from the log** in Settings → Network turns what you saw into allow entries; entries an earlier version seeded remain and can be deleted there.
 - **Upgraded the loop editor's graph library (@xyflow/react) to v13.**
 
 ## [0.27.0] - 2026-11-25

@@ -120,7 +120,7 @@ public sealed partial class ModelGatewayMiddleware
         }
         if (decision == NetworkDecision.Blocked)
         {
-            await RefuseAsync(context, StatusCodes.Status403Forbidden, $"ILD's network policy refused {target.Host}.");
+            await RefuseAsync(context, StatusCodes.Status403Forbidden, $"ILD's network policy refused {target.Host}. Allow it under Settings > Network, in the scope of provider '{provider.Name}', or change the mode.");
             return;
         }
 

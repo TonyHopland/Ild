@@ -93,7 +93,7 @@ public sealed class TestDb : IDisposable
 
     /// <summary>The network policy module over this database; the policy and notifier default to ones that do nothing.</summary>
     public NetworkPolicyEdits NetworkEdits(IEgressPolicy? policy = null, INetworkNotifier? notifier = null)
-        => new(Network, NetworkForwards, Providers, Settings, Context, policy ?? Moq.Mock.Of<IEgressPolicy>(), notifier ?? new NoopNetworkNotifier());
+        => new(Network, NetworkForwards, Providers, Settings, policy ?? Moq.Mock.Of<IEgressPolicy>(), notifier ?? new NoopNetworkNotifier());
 
     public AppDbContext Fresh()
     {

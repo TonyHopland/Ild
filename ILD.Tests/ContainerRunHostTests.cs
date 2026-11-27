@@ -1766,6 +1766,30 @@ public sealed class ContainerRunHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_failed_install_names_the_hosts_the_proxy_refused_and_the_scope_to_allow_them_in()
+    {
+        var refusals = new InstallerRefusals();
+        using var host = NewHost(Options(), [], services: new ExecRunHostServices { Refusals = refusals });
+        _api.OnExec = async e =>
+        {
+            if (e.WantsStdin) await e.ReadStdinToEndAsync();
+            if (e.Container.StartsWith("ild-tools-", StringComparison.Ordinal))
+            {
+                refusals.Note("toolchains", "downloads.example", 443);
+                await e.WriteStderrAsync("curl: (35) TLS connect error\n");
+                await e.ExitAsync(1);
+                return;
+            }
+            await e.ExitAsync(0);
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunAsync(host, _run, MakeBaseRepository("base", ("package.json", "{}"), (".nvmrc", "99"))));
+
+        Assert.Contains("downloads.example:443", ex.Message);
+        Assert.Contains("Installers scope of Settings → Network", ex.Message);
+    }
+
+    [Fact]
     public async Task With_toolchains_off_a_run_has_only_its_image_no_store_and_no_path_of_ilds()
     {
         var options = Options() with { Toolchains = false };

@@ -34,7 +34,7 @@ public sealed class NetworkPolicyEditsTests : IDisposable
     private NetworkPolicyEdits Edits() => _db.NetworkEdits(_policy.Object, _notifier.Object);
 
     private NetworkPolicyEdits Edits(INetworkPolicyStore entries, INetworkForwardStore? forwards = null)
-        => new(entries, forwards ?? _db.NetworkForwards, _db.Providers, _db.Settings, _db.Context, _policy.Object, _notifier.Object);
+        => new(entries, forwards ?? _db.NetworkForwards, _db.Providers, _db.Settings, _policy.Object, _notifier.Object);
 
     private void AssertChangedOnce() => Assert.Equal(["invalidate", "notify"], _calls);
 
@@ -253,26 +253,38 @@ public sealed class NetworkPolicyEditsTests : IDisposable
     }
 
     [Fact]
-    public async Task Syncing_a_provider_and_the_startup_seed_invalidate_and_tell_the_listeners_only_when_they_changed_something()
+    public async Task Allowing_several_hosts_stores_them_together_and_tells_the_listeners_once_and_only_when_one_is_new()
     {
-        var provider = new AiProvider { Id = Guid.NewGuid(), Name = "u", Type = "opencode", BaseUrl = "https://llm.example.com", Model = "m" };
-        await _db.Providers.CreateAiProviderAsync(provider);
         var edits = Edits();
 
-        Assert.True(await edits.SyncProviderAsync(provider, Ct));
+        var first = await edits.AddAllowedAsync(["a.example", "b.example", ".c.example", "a.example"], null, false, Ct);
+
+        Assert.Equal(["a.example", "b.example", ".c.example"], first.Value!.Select(e => e.Host));
+        Assert.Equal(3, (await _db.Network.GetEntriesAsync(Ct)).Count);
         AssertChangedOnce();
         _calls.Clear();
 
-        Assert.False(await edits.SyncProviderAsync(provider, Ct));
+        var again = await edits.AddAllowedAsync(["a.example", "b.example"], null, false, Ct);
+
+        Assert.Empty(again.Value!);
+        AssertNothingChanged();
+    }
+
+    [Fact]
+    public async Task Allowing_hosts_refuses_and_writes_nothing_when_another_request_added_one_first_but_lets_any_other_failure_through()
+    {
+        var provider = await SeedProviderAsync();
+        var winner = new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = "b.example", ListKind = NetworkListKind.Whitelist, AiProviderId = provider, CreatedAt = DateTime.UtcNow };
+        var racing = new RacingEntries(_db.Network) { BeforeAdd = () => new NetworkPolicyStore(_db.Fresh()).AddEntryAsync(winner, Ct) };
+
+        var raced = await Edits(racing).AddAllowedAsync(["a.example", "b.example"], provider, false, Ct);
+
+        Assert.Equal(NetworkEditOutcome.Refused, raced.Outcome);
+        Assert.Equal(["b.example"], (await _db.Network.GetEntriesAsync(Ct)).Select(e => e.Host));
         AssertNothingChanged();
 
-        var other = new AiProvider { Id = Guid.NewGuid(), Name = "o", Type = "opencode", BaseUrl = "https://other.example.com", Model = "m" };
-        await _db.Providers.CreateAiProviderAsync(other);
-        Assert.Equal(1, await edits.SeedProviderEntriesAsync(Ct));
-        AssertChangedOnce();
-        _calls.Clear();
-
-        Assert.Equal(0, await edits.SeedProviderEntriesAsync(Ct));
+        var failing = new RacingEntries(_db.Network) { BeforeAdd = () => throw new DbUpdateException("the database is down") };
+        await Assert.ThrowsAsync<DbUpdateException>(() => Edits(failing).AddAllowedAsync(["c.example"], provider, false, Ct));
         AssertNothingChanged();
     }
 
@@ -281,6 +293,12 @@ public sealed class NetworkPolicyEditsTests : IDisposable
     {
         public Func<Task>? BeforeAdd { get; init; }
         public Func<Task>? BeforeUpdate { get; init; }
+
+        public async Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default)
+        {
+            if (BeforeAdd is not null) await BeforeAdd();
+            await inner.AddEntriesAsync(entries, ct);
+        }
 
         public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
         {
@@ -300,6 +318,7 @@ public sealed class NetworkPolicyEditsTests : IDisposable
         public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => inner.DeleteEntryAsync(id, ct);
         public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => inner.GetLogAsync(take, ct);
         public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default) => inner.GetLogEntryAsync(id, ct);
+        public Task<IReadOnlyList<NetworkLogDestination>> GetLogDestinationsAsync(Guid? aiProviderId, bool installers, DateTime since, CancellationToken ct = default) => inner.GetLogDestinationsAsync(aiProviderId, installers, since, ct);
         public Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default) => inner.AppendLogAsync(entries, ct);
         public Task<int> ClearLogAsync(CancellationToken ct = default) => inner.ClearLogAsync(ct);
         public Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => inner.DeleteLogOlderThanAsync(cutoff, ct);

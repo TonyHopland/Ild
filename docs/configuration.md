@@ -166,7 +166,7 @@ A run mounts the zones it has something in, and only its own repository's. A **c
 - **Agents** are the CLIs ILD has a current install of, at that install's version: what **Settings** shows, after the update cooldown and any rollback. Each one starts on a Node of its own, whatever Node the project pins. That Node is also last on the run's `PATH`, so `npx` starts the [custom MCP servers](#custom-mcp-servers-json) a provider names in every run, while a Node project's own Node comes first.
 - **Chrome** is in the runner image, at `/opt/google/chrome/chrome`, for the chrome-devtools MCP server.
 - **The agents ILD has installed** go into the store ahead of time, when ILD starts and within a minute of installing or updating one, so the first run or chat does not wait for them.
-- **The first run that needs a toolchain version** installs it into the store, in a short-lived installer of the runner image that mounts only the zone it writes (and the toolchains read-only, for a repository's tools) and, like a run, has a network that reaches only ILD (an `internal` network on Docker and Podman, a NetworkPolicy to ILD's proxy port on Kubernetes). It downloads through the egress proxy, which judges it under the **Installers** scope of Settings → Network, and logs it there with the zone (`agents`, `toolchains` or `repo-<id>`). In `whitelist` mode the scope starts with the hosts mise, GitHub releases, each core tool's downloads, npm, PyPI, crates.io and NuGet use; add the host of anything else an install script downloads (a browser, a prebuilt binary). Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines and the hosts the proxy refused it.
+- **The first run that needs a toolchain version** installs it into the store, in a short-lived installer of the runner image that mounts only the zone it writes (and the toolchains read-only, for a repository's tools) and, like a run, has a network that reaches only ILD (an `internal` network on Docker and Podman, a NetworkPolicy to ILD's proxy port on Kubernetes). It downloads through the egress proxy, which judges it under the **Installers** scope of Settings → Network, and logs it there with the zone (`agents`, `toolchains` or `repo-<id>`). ILD ships no allow list: run installs in `monitor`, then allow the hosts the log shows for the Installers scope (Settings → Network, **Add allowed hosts from the log**) before switching to `whitelist`. A refused install names the hosts and the scope to allow them in. Later runs that need the same start without it. If an install fails, the run fails with the installer's last lines and the hosts the proxy refused it.
 - **Install scripts** (npm's `postinstall`, cargo's `build.rs`) are off in the agents and toolchains zones. In a repository's own zone they run, since that zone is only ever mounted by that repository's runs; `"run": { "ignoreScripts": true }` in `ild.config.json` turns them off there too. A change to a repository's tool specs installs into a fresh folder, so what an earlier set installed is not what the new one runs.
 - **Upgrading** from a version with one store installs everything once more into the new zones; the old store contents (the `ild-tools` volume on an engine) are never mounted again and can be removed.
 - **`npm install -g`** and `cargo install` go into the run's home (`$HOME/.local`), which is on `PATH`. When the run's Node has corepack, `pnpm` and `yarn` are its shims, at the version the project's `packageManager` pins.
@@ -895,7 +895,7 @@ A list entry is a host, not a URL. `api.example.com` matches exactly that host;
 `.example.com` (or `*.example.com`) matches `example.com` and every host beneath
 it. Matching ignores case and a trailing dot, and an IP literal matches exactly.
 An entry is either global or scoped to one AI provider, in which case it applies
-only to launches made for that provider. The **Installers** scope applies only to the toolchain installers ([Run toolchains](#run-toolchains)); global entries apply to them too, and no provider's entries do. The scope's allow list is seeded once with the hosts installs need, and what you delete stays deleted. In `whitelist` mode a connection is
+only to launches made for that provider. The **Installers** scope applies only to the toolchain installers ([Run toolchains](#run-toolchains)); global entries apply to them too, and no provider's entries do. ILD ships no allow list and adds, changes or removes no entry on its own: the policy starts empty in `monitor`. Review the Network Log, then use **Add allowed hosts from the log** (on the log, or per scope: all providers, one provider, the installers) to tick the hosts to allow, as the exact host or as `.suffix`. Nothing is written until you confirm, and switching to `whitelist` while a scope has recent traffic and no allow entry warns you once and links to it. In `whitelist` mode a connection is
 allowed only if a matching whitelist entry applies to it; in `blacklist` mode it
 is blocked only if a matching blacklist entry does; `monitor` logs everything and
 blocks nothing. Edits apply to the agent's **next connection** — no restart, and
@@ -1017,14 +1017,12 @@ connects to the addresses it resolved.
 [model gateway](adr/0031-model-gateway.md), which holds the credential, so they do not pass the proxy; ILD's own call to the
 provider's host is judged by the mode and the lists with the provider as the scope, and logged in the Network Log with the
 note "via model gateway", one line per request. In `whitelist` mode an upstream host that is not listed is refused, in
-`blacklist` mode a listed one is, and the CLI gets an error that names the host and says the network policy refused it. The
+`blacklist` mode a listed one is, and the CLI gets an error that names the host and the provider scope to allow it in. The
 upstream is your own provider configuration, so it is exempt from the protected destinations, like a declared forward: a local
-model on a LAN address keeps working while `private` is on. So that `whitelist` mode does not stop the models, ILD adds a
-whitelist entry scoped to the provider for each host the gateway calls for it (`api.anthropic.com`, `chatgpt.com`, `generativelanguage.googleapis.com`,
-`api.github.com` and `.githubcopilot.com`, or the host of an upstream provider's base URL) when the provider is created or its
-base URL or type changes, and the first start after an upgrade adds them for the providers that exist. They are ordinary
-provider-scoped entries in Settings → Network: delete one and that provider's model calls are refused in `whitelist` mode. The
-log covers what left for a run or chat. ILD's own calls that are not on a run's behalf (the Codex login refresh, agent version
+model on a LAN address keeps working while `private` is on. ILD adds no entry for it: before using `whitelist`, allow the
+provider's upstream host from the log in the provider's scope in Settings → Network, or its model calls are refused. Entries
+that an earlier version added for providers, and the Installers entries it seeded, remain as ordinary entries and can be deleted
+there. The log covers what left for a run or chat. ILD's own calls that are not on a run's behalf (the Codex login refresh, agent version
 checks, git fetches into the mirror) are not judged by the lists and not logged.
 
 Everything the agent runs is pointed at the proxy (under `dotnet run`, not in

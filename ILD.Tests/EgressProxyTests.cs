@@ -257,9 +257,9 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task In_whitelist_mode_an_installer_reaches_the_seeded_hosts_and_no_others_and_is_logged_under_its_zone()
+    public async Task In_whitelist_mode_an_installer_reaches_the_hosts_allowed_for_it_and_no_others_and_is_logged_under_its_zone()
     {
-        await InstallerNetworkDefaultsMigrator.MigrateAsync(_db.Context, TestContext.Current.CancellationToken);
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "registry.npmjs.org", ListKind = NetworkListKind.Whitelist, Installers = true }, TestContext.Current.CancellationToken);
         await SetModeAsync(NetworkMode.Whitelist);
 
         var (listed, listedStatus) = await ConnectAsync("registry.npmjs.org", installer: "repo-0123");
@@ -1762,9 +1762,11 @@ public sealed class EgressPolicyInvalidationTests
         public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false) => throw new NotSupportedException();
         public Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<NetworkLogDestination>> GetLogDestinationsAsync(Guid? aiProviderId, bool installers, DateTime since, CancellationToken ct = default) => throw new NotSupportedException();
         public Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<int> ClearLogAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => throw new NotSupportedException();

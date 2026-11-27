@@ -68,6 +68,7 @@ import {
   NetworkForward,
   NetworkProtectedDestination,
   NetworkListKind,
+  NetworkLogDestination,
   NetworkLogEntry,
   NetworkPolicyEntry,
   NetworkStatus,
@@ -1310,6 +1311,29 @@ export const networkService = {
   },
   getLog: async (take = 200): Promise<NetworkLogEntry[]> => {
     return api.get<NetworkLogEntry[]>(`/network/log?take=${take}`);
+  },
+  /** The distinct hosts logged for a scope (`global`, `installers` or `provider` with its id) over the last `days`. */
+  getLogDestinations: async (
+    scope: "global" | "installers" | "provider",
+    providerId?: string,
+    days = 7,
+  ): Promise<NetworkLogDestination[]> => {
+    const query = new URLSearchParams({ scope, days: String(days) });
+    if (providerId) query.set("providerId", providerId);
+    return api.get<NetworkLogDestination[]>(`/network/log/destinations?${query}`);
+  },
+  /** Allow each pattern in one scope at once; nothing is written when any of them is refused. */
+  addAllowed: async (
+    scope: "global" | "installers" | "provider",
+    providerId: string | null,
+    patterns: string[],
+  ): Promise<NetworkPolicyEntry[]> => {
+    const result = await api.post<{ created: NetworkPolicyEntry[] }>("/network/entries/bulk", {
+      scope,
+      aiProviderId: providerId,
+      entries: patterns,
+    });
+    return result.created;
   },
   clearLog: async (): Promise<{ removed: number }> => {
     return api.delete<{ removed: number }>("/network/log");
