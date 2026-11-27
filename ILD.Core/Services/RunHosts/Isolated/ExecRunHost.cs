@@ -767,7 +767,7 @@ public abstract class ExecRunHost(IProcessRunner runner, ILogger? logger) : IRun
             var tail = string.Join('\n', result.StdErr.Trim().Split('\n').TakeLast(15));
             var refused = Refusals?.Refused(scope) ?? [];
             throw new InvalidOperationException($"could not install the run's toolchains ({string.Join(", ", arguments)}) in the toolchain store: {tail}"
-                + (refused.Count == 0 ? "" : $"\nthe egress proxy refused {string.Join(", ", refused)}; see Settings → Network"));
+                + (refused.Count == 0 ? "" : $"\nthe egress proxy refused {string.Join(", ", refused)}; allow these hosts in the Installers scope of Settings → Network"));
         }
         return RunToolStore.Parse(result.StdOut, root);
     }

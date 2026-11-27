@@ -20,7 +20,8 @@ import type {
 import ConfirmModal from "../../../components/ConfirmModal";
 import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 import { AddForwardRow, ForwardTable } from "./NetworkForwards";
-import { AddRuleRow, RuleTable, scopeFields } from "./NetworkRules";
+import { AllowFromLogDialog, DESTINATION_DAYS, scopeRequest } from "./NetworkAllowFromLog";
+import { AddRuleRow, INSTALLERS_SCOPE, RuleTable, scopeFields } from "./NetworkRules";
 import { PROTECTED_ANCHOR, ProtectedDestinations } from "./NetworkProtected";
 import { describeError } from "./networkShared";
 
@@ -75,6 +76,13 @@ function parseMode(value: string): NetworkMode | null {
 function coversHost(pattern: string, host: string): boolean {
   if (pattern.startsWith(".")) return host === pattern.slice(1) || host.endsWith(pattern);
   return host === pattern;
+}
+
+/** A scope that has logged traffic the whitelist would refuse and no allow entry to say otherwise. */
+interface UnallowedScope {
+  scope: string;
+  label: string;
+  count: number;
 }
 
 /**
@@ -199,6 +207,8 @@ export default function NetworkSettings() {
    * rather than committed, for when the rule wants widening to `.example.com`
    * or narrowing to one provider first.
    */
+  const [allowFromLog, setAllowFromLog] = useState<string | null>(null);
+  const [unallowed, setUnallowed] = useState<UnallowedScope[]>([]);
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
   const entryList = useGuardedList(
@@ -316,7 +326,43 @@ export default function NetworkSettings() {
     } catch (err) {
       setMode(previous);
       setModeError(describeError(err, "Failed to change the mode."));
+      return;
     }
+    if (next === "whitelist" && previous !== "whitelist") void warnAboutUnallowed();
+    else setUnallowed([]);
+  };
+
+  /**
+   * Whitelist refuses what no allow entry covers, and the policy ships empty. A scope that has
+   * been in use but has nothing allowed would stop working, so say so once and offer the way to fix it.
+   */
+  const warnAboutUnallowed = async () => {
+    const allowed = entries.filter((e) => e.listKind === "Whitelist");
+    const hasGlobal = allowed.some((e) => e.aiProviderId === null && !e.installers);
+    const scopes = [
+      {
+        scope: INSTALLERS_SCOPE,
+        label: "Installers",
+        covered: hasGlobal || allowed.some((e) => e.installers),
+      },
+      ...providers.map((p) => ({
+        scope: p.id,
+        label: p.name,
+        covered: hasGlobal || allowed.some((e) => e.aiProviderId === p.id),
+      })),
+    ].filter((s) => !s.covered);
+    const found = await Promise.all(
+      scopes.map(async ({ scope, label }) => {
+        const { kind, providerId } = scopeRequest(scope);
+        try {
+          const hosts = await networkService.getLogDestinations(kind, providerId, DESTINATION_DAYS);
+          return { scope, label, count: hosts.filter((h) => !h.allowed).length };
+        } catch {
+          return { scope, label, count: 0 };
+        }
+      }),
+    );
+    setUnallowed(found.filter((f) => f.count > 0));
   };
 
   const chooseMode = (next: NetworkMode) => {
@@ -535,6 +581,30 @@ export default function NetworkSettings() {
         </SettingRow>
       </section>
 
+      {unallowed.length > 0 && (
+        <div className="net-banner" role="status">
+          {unallowed.map((u) => (
+            <div key={u.scope}>
+              <strong>
+                {u.count} {u.count === 1 ? "host was" : "hosts were"} used in the last{" "}
+                {DESTINATION_DAYS} days and {u.count === 1 ? "isn't" : "aren't"} allowed
+              </strong>{" "}
+              ({u.label}).{" "}
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setUnallowed([]);
+                  setAllowFromLog(u.scope);
+                }}
+              >
+                Add allowed hosts from the log
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <ConfirmModal
         isOpen={confirmingOff}
         title="Turn the network proxy off?"
@@ -558,9 +628,9 @@ export default function NetworkSettings() {
           <h3 className="settings-card-title">Rules</h3>
         </div>
         <p className="settings-card-note">
-          The Installers scope covers what a toolchain installer downloads while it installs a run's
-          tools, which no provider's rules apply to; its default allow list names the hosts mise,
-          npm, pip, cargo and the NuGet credential provider fetch from. Edit it like any other rule.
+          ILD ships no allow list. Run in Monitor, review the traffic log, then allow the hosts you
+          want. The Installers scope covers what a toolchain installer downloads while it installs a
+          run's tools, which no provider's rules apply to.
         </p>
         {mode === "monitor" && (
           <p className="settings-card-note">
@@ -601,6 +671,11 @@ export default function NetworkSettings() {
           onRemove={removeEntry}
         />
         <AddRuleRow providers={providers} draft={draftHost} onAdd={addEntry} />
+        <div className="net-add">
+          <button type="button" className="btn" onClick={() => setAllowFromLog("")}>
+            Add allowed hosts from the log
+          </button>
+        </div>
       </section>
 
       <section className="settings-card">
@@ -630,14 +705,19 @@ export default function NetworkSettings() {
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Traffic log</h3>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void clearLog()}
-            disabled={log.length === 0}
-          >
-            Clear log
-          </button>
+          <div className="net-header-actions">
+            <button type="button" className="btn" onClick={() => setAllowFromLog("")}>
+              Add allowed hosts from the log
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void clearLog()}
+              disabled={log.length === 0}
+            >
+              Clear log
+            </button>
+          </div>
         </div>
         <div className="net-toolbar">
           <input
@@ -780,6 +860,15 @@ export default function NetworkSettings() {
         </NumericSettingField>
       </section>
 
+      {allowFromLog !== null && (
+        <AllowFromLogDialog
+          providers={providers}
+          initialScope={allowFromLog}
+          onClose={() => setAllowFromLog(null)}
+          onAdded={(created) => created.forEach((entry) => entryList.add(entry))}
+        />
+      )}
+
       <style>{`
         .net-banner {
           background-color: #3b2f12;
@@ -789,6 +878,7 @@ export default function NetworkSettings() {
           font-size: 0.8rem;
           padding: 0.5rem 0.75rem;
         }
+        .net-header-actions { display: flex; gap: 0.5rem; }
         .net-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
         .net-table th {
           text-align: left;

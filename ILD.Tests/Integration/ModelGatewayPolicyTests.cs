@@ -150,6 +150,12 @@ public class ModelGatewayPolicyTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Contains($"ILD's network policy refused {_host}", body);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var name = (await scope.ServiceProvider.GetRequiredService<IProviderStore>().GetAiProviderByIdAsync(provider))!.Name;
+            Assert.Contains($"provider '{name}'", body);
+        }
+        Assert.Contains("Settings > Network", body);
         Assert.DoesNotContain("real", body);
         Assert.DoesNotContain("upstream\"", body);
         Assert.Empty(_hits);
@@ -193,23 +199,6 @@ public class ModelGatewayPolicyTests : IAsyncLifetime
         Assert.Single(_hits);
     }
 
-    [Fact]
-    public async Task A_provider_with_its_whitelist_entry_from_creation_keeps_working_in_whitelist_mode()
-    {
-        await SetModeAsync("whitelist");
-        var (provider, token) = await OpenAsync();
-        await using (var scope = _factory.Services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await scope.ServiceProvider.GetRequiredService<NetworkPolicyEdits>()
-                .SyncProviderAsync((await db.AiProviders.FindAsync([provider], TestContext.Current.CancellationToken))!, TestContext.Current.CancellationToken);
-        }
-
-        var (response, _) = await CallAsync(token);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await AssertRowAsync(provider, NetworkDecision.Allowed);
-    }
 
     private sealed class PrivateLoopback : IProtectedDestinationSource
     {

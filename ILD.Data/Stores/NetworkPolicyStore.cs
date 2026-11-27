@@ -39,7 +39,6 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
         entry.ListKind = kind;
         entry.AiProviderId = aiProviderId;
         entry.Installers = installers;
-        entry.AddedForProvider = false;
         await _db.SaveChangesAsync(ct);
         return entry;
     }
@@ -55,6 +54,21 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
 
     public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default)
         => _db.NetworkLogEntries.AsNoTracking().FirstOrDefaultAsync(l => l.Id == id, ct);
+
+    public async Task<IReadOnlyList<NetworkLogDestination>> GetLogDestinationsAsync(Guid? aiProviderId, bool installers, DateTime since, CancellationToken ct = default)
+    {
+        var rows = _db.NetworkLogEntries.AsNoTracking().Where(l => l.Timestamp >= since && l.Reason == null);
+        rows = installers
+            ? rows.Where(l => l.Installer != null)
+            : rows.Where(l => l.Installer == null && (aiProviderId == null || l.AiProviderId == aiProviderId));
+        var grouped = await rows
+            .GroupBy(l => l.Host)
+            .Select(g => new { Host = g.Key, Count = g.Count(), LastSeen = g.Max(l => l.Timestamp) })
+            .OrderByDescending(d => d.Count)
+            .ThenBy(d => d.Host)
+            .ToListAsync(ct);
+        return [.. grouped.Select(d => new NetworkLogDestination(d.Host, d.Count, d.LastSeen))];
+    }
 
     public async Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default)
     {

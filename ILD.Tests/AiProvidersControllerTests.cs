@@ -50,8 +50,7 @@ public class AiProvidersControllerTests : IDisposable
             _db,
             new ProviderStore(_db),
             new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
-            _provisioner,
-            new NetworkPolicyEdits(new NetworkPolicyStore(_db), new NetworkForwardStore(_db), new ProviderStore(_db), new AppSettingStore(_db), _db, Mock.Of<IEgressPolicy>(), new NoopNetworkNotifier()));
+            _provisioner);
 
     /// <summary>Captures the provider types the controller asks to provision.</summary>
     private sealed class RecordingProvisioner : IManagedAgentProvisioner

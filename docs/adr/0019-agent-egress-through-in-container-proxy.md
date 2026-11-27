@@ -253,4 +253,4 @@ declared forward (ADR-0020), one decision per host and port, which is exempt fro
 
 **Amendment (work item 634).** The model gateway (ADR-0031) is under this policy too: its upstream host is judged by the mode and
 lists with the provider as the scope, and logged in the Network Log, marked as gateway traffic. Like a declared forward, it is
-exempt from the protected destinations, since the host is the operator's own provider configuration.
+exempt from the protected destinations, since the host is the operator's own provider configuration. *Superseded in part: ILD ships no allow lists. It adds no entry for a provider's upstream or for the installers; the operator builds the lists from the Network Log.*

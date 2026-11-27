@@ -24,9 +24,17 @@ public interface INetworkPolicyStore
     /// <summary>Newest first.</summary>
     Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default);
     Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// The distinct hosts logged since <paramref name="since"/> for a scope, most used first: the installers' connections, or the agent
+    /// connections of one provider (every provider when null). A connection refused for a reason the lists do not control is left out.
+    /// </summary>
+    Task<IReadOnlyList<NetworkLogDestination>> GetLogDestinationsAsync(Guid? aiProviderId, bool installers, DateTime since, CancellationToken ct = default);
     Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default);
     Task<int> ClearLogAsync(CancellationToken ct = default);
 
     /// <summary>Drops every log row stamped before <paramref name="cutoff"/>, and says how many.</summary>
     Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }
+
+public sealed record NetworkLogDestination(string Host, int Count, DateTime LastSeen);

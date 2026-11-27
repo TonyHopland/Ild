@@ -24,6 +24,9 @@ public class NetworkController : ControllerBase
 {
     private const int DefaultLogTake = 200;
     private const int MaxLogTake = 1000;
+    private const int DefaultDestinationDays = 7;
+    private const int MaxDestinationDays = 90;
+    private const string InstallersScope = "installers";
 
     private readonly INetworkPolicyStore _store;
     private readonly INetworkForwardStore _forwards;
@@ -82,6 +85,24 @@ public class NetworkController : ControllerBase
         public int LocalPort { get; set; }
     }
 
+    public sealed class AllowedEntry
+    {
+        [Required]
+        public string Pattern { get; set; } = string.Empty;
+    }
+
+    public sealed class AddAllowedRequest
+    {
+        /// <summary><c>global</c>, <c>installers</c> or <c>provider</c> (with <see cref="AiProviderId"/>).</summary>
+        [Required]
+        public string Scope { get; set; } = string.Empty;
+
+        public Guid? AiProviderId { get; set; }
+
+        [Required]
+        public List<AllowedEntry> Entries { get; set; } = [];
+    }
+
     public sealed class AddFromLogRequest
     {
         /// <summary>Scope the new entry to the log entry's provider instead of making it global.</summary>
@@ -134,6 +155,17 @@ public class NetworkController : ControllerBase
     public async Task<IActionResult> AddEntry([FromBody] AddEntryRequest request, CancellationToken ct)
         => EntryResult(await _edits.AddEntryAsync(request.Host, request.ListKind, request.AiProviderId, request.Installers, ct));
 
+    [HttpPost("entries/bulk")]
+    public async Task<IActionResult> AddAllowed([FromBody] AddAllowedRequest request, CancellationToken ct)
+    {
+        if (!TryReadScope(request.Scope, request.AiProviderId, out var installers, out var scopeError))
+            return BadRequest(new { error = scopeError });
+        var result = await _edits.AddAllowedAsync([.. request.Entries.Select(e => e.Pattern)], request.AiProviderId, installers, ct);
+        return result.Outcome == NetworkEditOutcome.Refused
+            ? BadRequest(new { error = result.Error })
+            : Ok(new { created = result.Value!.Select(View) });
+    }
+
     [HttpPut("entries/{id:guid}")]
     public async Task<IActionResult> UpdateEntry(Guid id, [FromBody] AddEntryRequest request, CancellationToken ct)
         => EntryResult(await _edits.UpdateEntryAsync(id, request.Host, request.ListKind, request.AiProviderId, request.Installers, ct));
@@ -180,6 +212,43 @@ public class NetworkController : ControllerBase
     [HttpGet("log")]
     public async Task<IActionResult> GetLog([FromQuery] int take = DefaultLogTake, CancellationToken ct = default)
         => Ok((await _store.GetLogAsync(Math.Clamp(take, 1, MaxLogTake), ct)).Select(View));
+
+    /// <summary>The distinct hosts the log shows for a scope in the last <paramref name="days"/> days, with whether the whitelist already admits each.</summary>
+    [HttpGet("log/destinations")]
+    public async Task<IActionResult> GetLogDestinations([FromQuery] string scope, [FromQuery] Guid? providerId, [FromQuery] int days = DefaultDestinationDays, CancellationToken ct = default)
+    {
+        if (!TryReadScope(scope, providerId, out var installers, out var error))
+            return BadRequest(new { error });
+        var since = DateTime.UtcNow.AddDays(-Math.Clamp(days, 1, MaxDestinationDays));
+        var entries = await _store.GetEntriesAsync(ct);
+        var destinations = await _store.GetLogDestinationsAsync(providerId, installers, since, ct);
+        return Ok(destinations.Select(d => new
+        {
+            host = d.Host,
+            count = d.Count,
+            lastSeen = d.LastSeen,
+            allowed = EgressRules.Decide(NetworkMode.Whitelist, entries, d.Host, providerId, installers ? InstallersScope : null) == NetworkDecision.Allowed,
+        }));
+    }
+
+    private static bool TryReadScope(string? scope, Guid? providerId, out bool installers, out string error)
+    {
+        installers = false;
+        error = string.Empty;
+        switch (scope)
+        {
+            case "global" when providerId is null:
+                return true;
+            case "installers" when providerId is null:
+                installers = true;
+                return true;
+            case "provider" when providerId is not null:
+                return true;
+            default:
+                error = "scope must be 'global', 'installers' or 'provider' (with providerId)";
+                return false;
+        }
+    }
 
     [HttpDelete("log")]
     public async Task<IActionResult> ClearLog(CancellationToken ct)

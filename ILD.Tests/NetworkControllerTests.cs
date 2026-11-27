@@ -540,6 +540,77 @@ public sealed class NetworkControllerTests : IDisposable
     private async Task<NetworkPolicyEntry> StoredRuleAsync(Guid id)
         => (await _db.Network.GetEntryAsync(id, TestContext.Current.CancellationToken))!;
 
+    private sealed record DestinationView(string Host, int Count, DateTime LastSeen, bool Allowed);
+
+    private async Task LogAsync(string host, Guid? provider = null, string? installer = null, DateTime? at = null, string? reason = null)
+        => await _db.Network.AppendLogAsync([new NetworkLogEntry { Id = Guid.NewGuid(), Host = host, Port = 443, Timestamp = at ?? DateTime.UtcNow, Decision = NetworkDecision.Advisory, AiProviderId = provider, Installer = installer, Reason = reason }], TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task The_log_destinations_of_a_scope_are_counted_marked_when_allowed_and_leave_out_what_the_lists_do_not_decide()
+    {
+        var mine = await SeedProviderAsync("mine");
+        var other = await SeedProviderAsync("other");
+        await LogAsync("registry.example", mine);
+        await LogAsync("registry.example", mine);
+        await LogAsync("api.example", mine);
+        await LogAsync("elsewhere.example", other);
+        await LogAsync("old.example", mine, at: DateTime.UtcNow.AddDays(-30));
+        await LogAsync("loopback.example", mine, reason: "loopback");
+        await LogAsync("pypi.example", installer: "agents");
+        await SeedRuleAsync("api.example", provider: mine);
+
+        var forProvider = Body<List<DestinationView>>(await Build().GetLogDestinations("provider", mine, 7, TestContext.Current.CancellationToken));
+        var forInstallers = Body<List<DestinationView>>(await Build().GetLogDestinations("installers", null, 7, TestContext.Current.CancellationToken));
+        var forGlobal = Body<List<DestinationView>>(await Build().GetLogDestinations("global", null, 7, TestContext.Current.CancellationToken));
+
+        Assert.Equal([("registry.example", 2, false), ("api.example", 1, true)], forProvider.Select(d => (d.Host, d.Count, d.Allowed)));
+        Assert.Equal(["pypi.example"], forInstallers.Select(d => d.Host));
+        Assert.Equal(["registry.example", "api.example", "elsewhere.example"], forGlobal.Select(d => d.Host));
+        Assert.All(forGlobal, d => Assert.False(d.Allowed));
+    }
+
+    [Fact]
+    public async Task A_log_destinations_request_needs_a_scope_that_makes_sense()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.IsType<BadRequestObjectResult>(await Build().GetLogDestinations("provider", null, 7, ct));
+        Assert.IsType<BadRequestObjectResult>(await Build().GetLogDestinations("global", Guid.NewGuid(), 7, ct));
+        Assert.IsType<BadRequestObjectResult>(await Build().GetLogDestinations("nowhere", null, 7, ct));
+    }
+
+    [Fact]
+    public async Task Allowing_hosts_from_the_log_writes_only_the_chosen_ones_in_the_chosen_scope()
+    {
+        var provider = await SeedProviderAsync();
+        await SeedRuleAsync("keep.example", provider: provider);
+
+        var result = await Build().AddAllowed(Request("provider", provider, "api.example", ".Cdn.Example", "api.example", "keep.example"), TestContext.Current.CancellationToken);
+
+        Assert.IsType<OkObjectResult>(result);
+        var stored = await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(
+            [("api.example", provider, false), (".cdn.example", provider, false), ("keep.example", provider, false)],
+            stored.OrderBy(e => e.CreatedAt).Select(e => (e.Host, e.AiProviderId, e.Installers)).OrderBy(e => e.Host == "keep.example" ? 2 : 0).ToArray());
+        Assert.All(stored, e => Assert.Equal(NetworkListKind.Whitelist, e.ListKind));
+    }
+
+    [Fact]
+    public async Task Allowing_hosts_for_the_installers_writes_installers_entries_and_one_bad_pattern_writes_nothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.IsType<OkObjectResult>(await Build().AddAllowed(Request("installers", null, "pypi.example"), ct));
+        Assert.IsType<BadRequestObjectResult>(await Build().AddAllowed(Request("global", null, "fine.example", "not a host"), ct));
+        Assert.IsType<BadRequestObjectResult>(await Build().AddAllowed(Request("provider", null, "fine.example"), ct));
+
+        var entry = Assert.Single(await _db.Network.GetEntriesAsync(ct));
+        Assert.Equal(("pypi.example", true), (entry.Host, entry.Installers));
+    }
+
+    private static NetworkController.AddAllowedRequest Request(string scope, Guid? provider, params string[] patterns)
+        => new() { Scope = scope, AiProviderId = provider, Entries = [.. patterns.Select(p => new NetworkController.AllowedEntry { Pattern = p })] };
+
     [Fact]
     public async Task Updating_a_rules_host_canonicalises_it_and_keeps_its_identity()
     {

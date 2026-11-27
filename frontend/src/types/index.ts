@@ -1728,6 +1728,14 @@ export interface DirectRoute {
   chat: boolean;
 }
 
+/** One host the traffic log shows for a scope over a period, and whether the whitelist already admits it. */
+export interface NetworkLogDestination {
+  host: string;
+  count: number;
+  lastSeen: string;
+  allowed: boolean;
+}
+
 export type NetworkPolicyChangedPayload = Record<string, never>;
 export type NetworkLogAppendedPayload = NetworkLogEntry;
 export type NetworkLogClearedPayload = Record<string, never>;
