@@ -270,13 +270,35 @@ public sealed class NetworkPolicyEditsTests : IDisposable
         AssertNothingChanged();
     }
 
+    [Fact]
+    public async Task Allowing_hosts_refuses_and_writes_nothing_when_another_request_added_one_first_but_lets_any_other_failure_through()
+    {
+        var provider = await SeedProviderAsync();
+        var winner = new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = "b.example", ListKind = NetworkListKind.Whitelist, AiProviderId = provider, CreatedAt = DateTime.UtcNow };
+        var racing = new RacingEntries(_db.Network) { BeforeAdd = () => new NetworkPolicyStore(_db.Fresh()).AddEntryAsync(winner, Ct) };
+
+        var raced = await Edits(racing).AddAllowedAsync(["a.example", "b.example"], provider, false, Ct);
+
+        Assert.Equal(NetworkEditOutcome.Refused, raced.Outcome);
+        Assert.Equal(["b.example"], (await _db.Network.GetEntriesAsync(Ct)).Select(e => e.Host));
+        AssertNothingChanged();
+
+        var failing = new RacingEntries(_db.Network) { BeforeAdd = () => throw new DbUpdateException("the database is down") };
+        await Assert.ThrowsAsync<DbUpdateException>(() => Edits(failing).AddAllowedAsync(["c.example"], provider, false, Ct));
+        AssertNothingChanged();
+    }
+
     /// <summary>The real store, with a chance for another writer to get in between the module's read and its write.</summary>
     private sealed class RacingEntries(INetworkPolicyStore inner) : INetworkPolicyStore
     {
         public Func<Task>? BeforeAdd { get; init; }
         public Func<Task>? BeforeUpdate { get; init; }
 
-        public Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default) => inner.AddEntriesAsync(entries, ct);
+        public async Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default)
+        {
+            if (BeforeAdd is not null) await BeforeAdd();
+            await inner.AddEntriesAsync(entries, ct);
+        }
 
         public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
         {

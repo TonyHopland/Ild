@@ -25,11 +25,6 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
 
     public async Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default)
     {
-        foreach (var entry in entries)
-        {
-            if (entry.Id == Guid.Empty) entry.Id = Guid.NewGuid();
-            if (entry.CreatedAt == default) entry.CreatedAt = DateTime.UtcNow;
-        }
         _db.NetworkPolicyEntries.AddRange(entries);
         await _db.SaveChangesAsync(ct);
     }

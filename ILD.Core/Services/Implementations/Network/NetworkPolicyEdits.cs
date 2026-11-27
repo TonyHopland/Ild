@@ -100,6 +100,11 @@ public sealed class NetworkPolicyEdits(
         }
         catch (DbUpdateException)
         {
+            // The unique index caught what the reads above could not: another request added one of these first.
+            var raced = false;
+            foreach (var entry in created)
+                raced |= await entries.FindEntryAsync(NetworkListKind.Whitelist, entry.Host, providerId, ct, installers) is not null;
+            if (!raced) throw;
             return NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>.Refuse("Another change to the allowed hosts ran at the same time; nothing was added, try again");
         }
         await ChangedAsync();

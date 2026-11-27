@@ -117,7 +117,7 @@ describe("Add allowed hosts from the log", () => {
     expect(addAllowed).not.toHaveBeenCalled();
   });
 
-  test("warns once when switching to whitelist leaves a scope with used hosts and no allow entries, and links to the dialog", async () => {
+  test("warns once per scope when switching to whitelist leaves it with used hosts and no allow entries, and following one link removes only that scope's warning", async () => {
     const read = mockServices("monitor");
     vi.spyOn(services.settingsService, "put").mockResolvedValue({
       key: services.NetworkSettingKeys.Mode,
@@ -146,7 +146,9 @@ describe("Add allowed hosts from the log", () => {
     expect(
       await screen.findByRole("dialog", { name: "Add allowed hosts from the log" }),
     ).toBeTruthy();
-    expect(screen.getAllByText(/hosts were used in the last 7 days/)).toHaveLength(1);
+    const remaining = screen.getAllByText(/hosts were used in the last 7 days/);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].closest("div")!.textContent).toMatch(/\(Installers\)/);
   });
 
   test("does not warn about a scope that already has an allow entry", async () => {
