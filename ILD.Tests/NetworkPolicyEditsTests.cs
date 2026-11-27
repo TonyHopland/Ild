@@ -252,11 +252,31 @@ public sealed class NetworkPolicyEditsTests : IDisposable
         AssertNothingChanged();
     }
 
+    [Fact]
+    public async Task Allowing_several_hosts_stores_them_together_and_tells_the_listeners_once_and_only_when_one_is_new()
+    {
+        var edits = Edits();
+
+        var first = await edits.AddAllowedAsync(["a.example", "b.example", ".c.example", "a.example"], null, false, Ct);
+
+        Assert.Equal(["a.example", "b.example", ".c.example"], first.Value!.Select(e => e.Host));
+        Assert.Equal(3, (await _db.Network.GetEntriesAsync(Ct)).Count);
+        AssertChangedOnce();
+        _calls.Clear();
+
+        var again = await edits.AddAllowedAsync(["a.example", "b.example"], null, false, Ct);
+
+        Assert.Empty(again.Value!);
+        AssertNothingChanged();
+    }
+
     /// <summary>The real store, with a chance for another writer to get in between the module's read and its write.</summary>
     private sealed class RacingEntries(INetworkPolicyStore inner) : INetworkPolicyStore
     {
         public Func<Task>? BeforeAdd { get; init; }
         public Func<Task>? BeforeUpdate { get; init; }
+
+        public Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default) => inner.AddEntriesAsync(entries, ct);
 
         public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
         {

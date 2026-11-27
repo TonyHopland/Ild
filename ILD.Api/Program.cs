@@ -174,6 +174,7 @@ try
     _ = app.Services.GetRequiredService<ILoggerFactory>();
     hostLogger = Log.Logger;
 
+
     // Attached here rather than injected: the buffer is a sink, so it is built
     // before the container holding the hub is.
     var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();

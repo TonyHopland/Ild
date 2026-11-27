@@ -37,7 +37,11 @@ export function AllowFromLogDialog({
   onClose,
   onAdded,
 }: AllowFromLogDialogProps) {
-  const [scope, setScope] = useState(initialScope);
+  const [scope, setScope] = useState(() =>
+    initialScope === INSTALLERS_SCOPE || providers.some((p) => p.id === initialScope)
+      ? initialScope
+      : "",
+  );
   const [destinations, setDestinations] = useState<NetworkLogDestination[] | null>(null);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
   const [error, setError] = useState<string | null>(null);
@@ -123,9 +127,6 @@ export function AllowFromLogDialog({
           >
             <option value="">All providers</option>
             <option value={INSTALLERS_SCOPE}>Installers</option>
-            {scope !== "" &&
-              scope !== INSTALLERS_SCOPE &&
-              !providers.some((p) => p.id === scope) && <option value={scope}>one provider</option>}
             {providers.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}

@@ -73,7 +73,10 @@ public sealed class NetworkPolicyEdits(
         return await AddOrFindAsync(valid.Host, kind, providerId, installers, ct);
     }
 
-    /// <summary>Allows each pattern in one scope, all or none: one that is not valid refuses the lot. A pattern already allowed there is left as it is.</summary>
+    /// <summary>
+    /// Allows each pattern in one scope, all or none: one that is not valid refuses the lot, and the new entries are stored in one save. A
+    /// pattern already allowed there is left as it is. Returns the entries it created.
+    /// </summary>
     public async Task<NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>> AddAllowedAsync(IReadOnlyList<string> patterns, Guid? providerId, bool installers, CancellationToken ct = default)
     {
         var hosts = new List<string>();
@@ -87,9 +90,19 @@ public sealed class NetworkPolicyEdits(
         var created = new List<NetworkPolicyEntry>();
         foreach (var host in hosts)
         {
-            var added = await AddOrFindAsync(host, NetworkListKind.Whitelist, providerId, installers, ct);
-            if (added.Outcome == NetworkEditOutcome.Created) created.Add(added.Value!);
+            if (await entries.FindEntryAsync(NetworkListKind.Whitelist, host, providerId, ct, installers) is not null) continue;
+            created.Add(new NetworkPolicyEntry { Id = Guid.NewGuid(), Host = host, ListKind = NetworkListKind.Whitelist, AiProviderId = providerId, Installers = installers, CreatedAt = DateTime.UtcNow });
         }
+        if (created.Count == 0) return new(NetworkEditOutcome.Created, created);
+        try
+        {
+            await entries.AddEntriesAsync(created, ct);
+        }
+        catch (DbUpdateException)
+        {
+            return NetworkEditResult<IReadOnlyList<NetworkPolicyEntry>>.Refuse("Another change to the allowed hosts ran at the same time; nothing was added, try again");
+        }
+        await ChangedAsync();
         return new(NetworkEditOutcome.Created, created);
     }
 

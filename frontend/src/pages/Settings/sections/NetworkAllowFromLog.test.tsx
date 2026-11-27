@@ -146,7 +146,7 @@ describe("Add allowed hosts from the log", () => {
     expect(
       await screen.findByRole("dialog", { name: "Add allowed hosts from the log" }),
     ).toBeTruthy();
-    expect(screen.queryByText(/hosts were used in the last 7 days/)).toBeNull();
+    expect(screen.getAllByText(/hosts were used in the last 7 days/)).toHaveLength(1);
   });
 
   test("does not warn about a scope that already has an allow entry", async () => {

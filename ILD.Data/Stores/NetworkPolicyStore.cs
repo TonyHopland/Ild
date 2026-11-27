@@ -23,6 +23,17 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
         => _db.NetworkPolicyEntries.AsNoTracking()
             .FirstOrDefaultAsync(e => e.ListKind == kind && e.Host == host && e.AiProviderId == aiProviderId && e.Installers == installers, ct);
 
+    public async Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default)
+    {
+        foreach (var entry in entries)
+        {
+            if (entry.Id == Guid.Empty) entry.Id = Guid.NewGuid();
+            if (entry.CreatedAt == default) entry.CreatedAt = DateTime.UtcNow;
+        }
+        _db.NetworkPolicyEntries.AddRange(entries);
+        await _db.SaveChangesAsync(ct);
+    }
+
     public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
     {
         if (entry.Id == Guid.Empty) entry.Id = Guid.NewGuid();
@@ -62,12 +73,10 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
             ? rows.Where(l => l.Installer != null)
             : rows.Where(l => l.Installer == null && (aiProviderId == null || l.AiProviderId == aiProviderId));
         var grouped = await rows
-            .GroupBy(l => l.Host)
-            .Select(g => new { Host = g.Key, Count = g.Count(), LastSeen = g.Max(l => l.Timestamp) })
-            .OrderByDescending(d => d.Count)
-            .ThenBy(d => d.Host)
+            .GroupBy(l => new { l.Host, l.AiProviderId })
+            .Select(g => new { g.Key.Host, g.Key.AiProviderId, Count = g.Count(), LastSeen = g.Max(l => l.Timestamp) })
             .ToListAsync(ct);
-        return [.. grouped.Select(d => new NetworkLogDestination(d.Host, d.Count, d.LastSeen))];
+        return [.. grouped.Select(d => new NetworkLogDestination(d.Host, d.AiProviderId, d.Count, d.LastSeen))];
     }
 
     public async Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default)

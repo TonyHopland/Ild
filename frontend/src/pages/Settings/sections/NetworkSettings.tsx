@@ -202,13 +202,13 @@ export default function NetworkSettings() {
   const [logFilter, setLogFilter] = useState("");
   const [decisionFilter, setDecisionFilter] = useState<"All" | NetworkDecision>("All");
   const [grouped, setGrouped] = useState(true);
+  const [allowFromLog, setAllowFromLog] = useState<string | null>(null);
+  const [unallowed, setUnallowed] = useState<UnallowedScope[]>([]);
   /**
    * The other way onto a list from the log: a host loaded into the add form
    * rather than committed, for when the rule wants widening to `.example.com`
    * or narrowing to one provider first.
    */
-  const [allowFromLog, setAllowFromLog] = useState<string | null>(null);
-  const [unallowed, setUnallowed] = useState<UnallowedScope[]>([]);
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
 
   const entryList = useGuardedList(
@@ -351,19 +351,18 @@ export default function NetworkSettings() {
         covered: hasGlobal || allowed.some((e) => e.aiProviderId === p.id),
       })),
     ].filter((s) => !s.covered);
-    const unchecked: string[] = [];
     const found = await Promise.all(
       scopes.map(async ({ scope, label }) => {
         const { kind, providerId } = scopeRequest(scope);
         try {
           const hosts = await networkService.getLogDestinations(kind, providerId, DESTINATION_DAYS);
-          return { scope, label, count: hosts.filter((h) => !h.allowed).length };
+          return { scope, label, count: hosts.filter((h) => !h.allowed).length, failed: false };
         } catch {
-          unchecked.push(label);
-          return { scope, label, count: 0 };
+          return { scope, label, count: 0, failed: true };
         }
       }),
     );
+    const unchecked = found.filter((f) => f.failed).map((f) => f.label);
     if (unchecked.length > 0)
       setModeError(
         `Could not check the recent traffic of ${unchecked.join(", ")}; review the log before relying on whitelist.`,
@@ -600,7 +599,7 @@ export default function NetworkSettings() {
                 type="button"
                 className="btn"
                 onClick={() => {
-                  setUnallowed([]);
+                  setUnallowed((prev) => prev.filter((p) => p.scope !== u.scope));
                   setAllowFromLog(u.scope);
                 }}
               >

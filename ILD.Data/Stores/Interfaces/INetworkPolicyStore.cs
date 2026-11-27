@@ -17,6 +17,9 @@ public interface INetworkPolicyStore
     Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false);
     Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default);
 
+    /// <summary>Adds all of the entries in one save: all of them are stored or none is.</summary>
+    Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default);
+
     /// <summary>Replaces the pattern, list and scope of an entry, keeping its Id and CreatedAt. Null when no entry has this id.</summary>
     Task<NetworkPolicyEntry?> UpdateEntryAsync(Guid id, string host, NetworkListKind kind, Guid? aiProviderId, CancellationToken ct = default, bool installers = false);
     Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default);
@@ -26,7 +29,7 @@ public interface INetworkPolicyStore
     Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>
-    /// The distinct hosts logged since <paramref name="since"/> for a scope, most used first: the installers' connections, or the agent
+    /// The hosts logged since <paramref name="since"/> for a scope, one row for each host and provider that used it: the installers' connections, or the agent
     /// connections of one provider (every provider when null). A connection refused for a reason the lists do not control is left out.
     /// </summary>
     Task<IReadOnlyList<NetworkLogDestination>> GetLogDestinationsAsync(Guid? aiProviderId, bool installers, DateTime since, CancellationToken ct = default);
@@ -37,4 +40,4 @@ public interface INetworkPolicyStore
     Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }
 
-public sealed record NetworkLogDestination(string Host, int Count, DateTime LastSeen);
+public sealed record NetworkLogDestination(string Host, Guid? AiProviderId, int Count, DateTime LastSeen);

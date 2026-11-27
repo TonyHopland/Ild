@@ -566,7 +566,25 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal([("registry.example", 2, false), ("api.example", 1, true)], forProvider.Select(d => (d.Host, d.Count, d.Allowed)));
         Assert.Equal(["pypi.example"], forInstallers.Select(d => d.Host));
         Assert.Equal(["registry.example", "api.example", "elsewhere.example"], forGlobal.Select(d => d.Host));
-        Assert.All(forGlobal, d => Assert.False(d.Allowed));
+        Assert.Equal([("registry.example", false), ("api.example", true), ("elsewhere.example", false)], forGlobal.Select(d => (d.Host, d.Allowed)));
+    }
+
+    [Fact]
+    public async Task A_host_is_allowed_for_all_providers_only_when_every_provider_that_used_it_is_allowed_it()
+    {
+        var first = await SeedProviderAsync("first");
+        var second = await SeedProviderAsync("second");
+        await LogAsync("shared.example", first);
+        await LogAsync("shared.example", second);
+        await LogAsync("both.example", first);
+        await LogAsync("both.example", second);
+        await SeedRuleAsync("shared.example", provider: first);
+        await SeedRuleAsync("both.example", provider: first);
+        await SeedRuleAsync("both.example", provider: second);
+
+        var forGlobal = Body<List<DestinationView>>(await Build().GetLogDestinations("global", null, 7, TestContext.Current.CancellationToken));
+
+        Assert.Equal([("both.example", 2, true), ("shared.example", 2, false)], forGlobal.Select(d => (d.Host, d.Count, d.Allowed)));
     }
 
     [Fact]
@@ -609,7 +627,7 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     private static NetworkController.AddAllowedRequest Request(string scope, Guid? provider, params string[] patterns)
-        => new() { Scope = scope, AiProviderId = provider, Entries = [.. patterns.Select(p => new NetworkController.AllowedEntry { Pattern = p })] };
+        => new() { Scope = scope, AiProviderId = provider, Entries = [.. patterns] };
 
     [Fact]
     public async Task Updating_a_rules_host_canonicalises_it_and_keeps_its_identity()

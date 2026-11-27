@@ -1331,7 +1331,7 @@ export const networkService = {
     const result = await api.post<{ created: NetworkPolicyEntry[] }>("/network/entries/bulk", {
       scope,
       aiProviderId: providerId,
-      entries: patterns.map((pattern) => ({ pattern })),
+      entries: patterns,
     });
     return result.created;
   },

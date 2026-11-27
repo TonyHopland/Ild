@@ -85,12 +85,6 @@ public class NetworkController : ControllerBase
         public int LocalPort { get; set; }
     }
 
-    public sealed class AllowedEntry
-    {
-        [Required]
-        public string Pattern { get; set; } = string.Empty;
-    }
-
     public sealed class AddAllowedRequest
     {
         /// <summary><c>global</c>, <c>installers</c> or <c>provider</c> (with <see cref="AiProviderId"/>).</summary>
@@ -100,7 +94,7 @@ public class NetworkController : ControllerBase
         public Guid? AiProviderId { get; set; }
 
         [Required]
-        public List<AllowedEntry> Entries { get; set; } = [];
+        public List<string> Entries { get; set; } = [];
     }
 
     public sealed class AddFromLogRequest
@@ -160,7 +154,7 @@ public class NetworkController : ControllerBase
     {
         if (!TryReadScope(request.Scope, request.AiProviderId, out var installers, out var scopeError))
             return BadRequest(new { error = scopeError });
-        var result = await _edits.AddAllowedAsync([.. request.Entries.Select(e => e.Pattern)], request.AiProviderId, installers, ct);
+        var result = await _edits.AddAllowedAsync(request.Entries, request.AiProviderId, installers, ct);
         return result.Outcome == NetworkEditOutcome.Refused
             ? BadRequest(new { error = result.Error })
             : Ok(new { created = result.Value!.Select(View) });
@@ -221,14 +215,18 @@ public class NetworkController : ControllerBase
             return BadRequest(new { error });
         var since = DateTime.UtcNow.AddDays(-Math.Clamp(days, 1, MaxDestinationDays));
         var entries = await _store.GetEntriesAsync(ct);
-        var destinations = await _store.GetLogDestinationsAsync(providerId, installers, since, ct);
-        return Ok(destinations.Select(d => new
-        {
-            host = d.Host,
-            count = d.Count,
-            lastSeen = d.LastSeen,
-            allowed = EgressRules.Decide(NetworkMode.Whitelist, entries, d.Host, providerId, installers ? InstallersScope : null) == NetworkDecision.Allowed,
-        }));
+        var rows = await _store.GetLogDestinationsAsync(providerId, installers, since, ct);
+        return Ok(rows
+            .GroupBy(d => d.Host)
+            .Select(g => new
+            {
+                host = g.Key,
+                count = g.Sum(d => d.Count),
+                lastSeen = g.Max(d => d.LastSeen),
+                allowed = g.All(d => EgressRules.Decide(NetworkMode.Whitelist, entries, g.Key, d.AiProviderId, installers ? InstallersScope : null) == NetworkDecision.Allowed),
+            })
+            .OrderByDescending(d => d.count)
+            .ThenBy(d => d.host));
     }
 
     private static bool TryReadScope(string? scope, Guid? providerId, out bool installers, out string error)
@@ -239,7 +237,7 @@ public class NetworkController : ControllerBase
         {
             case "global" when providerId is null:
                 return true;
-            case "installers" when providerId is null:
+            case InstallersScope when providerId is null:
                 installers = true;
                 return true;
             case "provider" when providerId is not null:

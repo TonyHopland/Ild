@@ -1762,6 +1762,7 @@ public sealed class EgressPolicyInvalidationTests
         public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default, bool installers = false) => throw new NotSupportedException();
         public Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task AddEntriesAsync(IReadOnlyList<NetworkPolicyEntry> entries, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
